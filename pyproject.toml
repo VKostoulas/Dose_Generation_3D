@@ -1,0 +1,50 @@
+[project]
+name = "dosegen"
+version = "0.1.0"
+description = "3D Dose Generation with Latent Diffusion."
+authors = [
+    { name = "Vangelis Kostoulas", email = "vageliskos93@gmail.com" }
+]
+keywords = [
+    'deep learning',
+    'dose generation',
+    'dose prediction',
+    'diffusion models',
+    'latent diffusion models',
+    'medical image generation',
+]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "argparse",
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "nnunetv2",
+    "monai-generative",
+    "torchinfo",
+    "lpips",
+    "blosc2",
+    "xformers",
+    "gdown",
+    "zarr",
+    "numcodecs",
+    "opencv-python",
+    "pydicom",
+    "trimesh",
+    "dcmrtstruct2nii"
+]
+
+[project.scripts]
+dosegen_plan_and_preprocess = "dosegen.configuration:main"
+dosegen_train_autoencoder = "dosegen.train_autoencoder:main"
+dosegen_train_ldm = "dosegen.train_ldm:main"
+dosegen_sample = "dosegen.sample:main"
+
+[build-system]
+requires = ["setuptools>=68.2.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["dosegen"]

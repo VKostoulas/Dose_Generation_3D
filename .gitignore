@@ -1,0 +1,11 @@
+# Ignore everything
+*
+
+# But do NOT ignore these:
+!.gitignore
+!README.md
+!pyproject.toml
+
+# Keep dosegen and all its contents
+!dosegen/
+!dosegen/**
