@@ -705,9 +705,9 @@ def overlay_images_with_rtdose(t2, bffe, rtdose, slices_to_remove, **kwargs):
 def process_and_save_patient(patient_index, patient_row_data, target_labels, dataset_id, images_path, labels_path, doses_path):
     print(f"Processing data from patient {patient_row_data['patient id']}...")
 
-    path_to_save_img_nifti_file = os.path.join(images_path, dataset_id.lower(), f"_{patient_index:0=3d}.nii.gz")
-    path_to_save_mask_nifti_file = os.path.join(labels_path, dataset_id.lower(), f"_{patient_index:0=3d}.nii.gz")
-    path_to_save_dose_nifti_file = os.path.join(doses_path, dataset_id.lower(), f"_{patient_index:0=3d}.nii.gz")
+    path_to_save_img_nifti_file = os.path.join(images_path, f"{dataset_id.lower()}_{patient_index:0=3d}.nii.gz")
+    path_to_save_mask_nifti_file = os.path.join(labels_path, f"{dataset_id.lower()}_{patient_index:0=3d}.nii.gz")
+    path_to_save_dose_nifti_file = os.path.join(doses_path, f"{dataset_id.lower()}_{patient_index:0=3d}.nii.gz")
 
     item_paths = get_item_paths(patient_row_data['folder path'])
     kwargs = {'target_labels': target_labels, 'rtstruct_path': item_paths['struct'], 'rtplan_path': item_paths['plan']}
