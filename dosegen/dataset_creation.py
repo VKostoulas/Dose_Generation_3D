@@ -19,6 +19,10 @@ from dcmrtstruct2nii.adapters.input.image.dcminputadapter import DcmInputAdapter
 from dcmrtstruct2nii.adapters.input.contours.rtstructinputadapter import RtStructInputAdapter
 from dcmrtstruct2nii.exceptions import ContourOutOfBoundsException
 
+import sys
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+
 from applicator_extractor.applicator import ApplicatorParser
 
 
