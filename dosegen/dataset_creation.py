@@ -624,7 +624,22 @@ def combine_label_masks(oar_mask, app_mask, target_labels):
     return mask
 
 
-def overlay_images_with_rtdose(t2, bffe, rtdose, **kwargs):
+def correct_last_image_slices_based_on_t2(image, t2_axial_spacing, slices_to_remove):
+    if slices_to_remove != 0:
+        if image.GetSpacing()[2] != t2_axial_spacing:
+            slices_to_remove = int(slices_to_remove * (t2_axial_spacing / image.GetSpacing()[2]))
+        image_np = sitk.GetArrayFromImage(image)
+        image_np = image_np[:-slices_to_remove]
+        final_image = sitk.GetImageFromArray(image_np)
+        final_image.SetSpacing(image.GetSpacing())
+        final_image.SetOrigin(image.GetOrigin())
+        final_image.SetDirection(image.GetDirection())
+        return final_image
+    else:
+        return image
+
+
+def overlay_images_with_rtdose(t2, bffe, rtdose, slices_to_remove, **kwargs):
     oar_mask, app_mask = extract_sitk_masks_from_dicoms(t2, bffe, **kwargs)
 
     def sp_to_str(spacing):
@@ -638,10 +653,19 @@ def overlay_images_with_rtdose(t2, bffe, rtdose, **kwargs):
     print(f'        DOSE: {rtdose.GetSize()}, {sp_to_str(rtdose.GetSpacing())}, {sp_to_str(rtdose.GetOrigin())}, {rtdose.GetDirection()}')
 
     print("    Restricting field of view and resampling everything based on the dose...")
-    t2 = resample_to_match_direction(t2, rtdose)
-    bffe = resample_to_match_direction(bffe, rtdose)
-    oar_mask = resample_to_match_direction(oar_mask, rtdose)
-    app_mask = resample_to_match_direction(app_mask, rtdose)
+    rtdose = resample_to_match_direction(rtdose, t2)
+    bffe = resample_to_match_direction(bffe, t2)
+    oar_mask = resample_to_match_direction(oar_mask, t2)
+    app_mask = resample_to_match_direction(app_mask, t2)
+
+    t2_axial_spacing = t2.GetSpacing()[2]
+    identity_direction = tuple(np.eye(3).flatten())
+    if np.allclose(t2.GetDirection(), identity_direction, atol=1e-6):
+        t2 = correct_last_image_slices_based_on_t2(t2, t2_axial_spacing, slices_to_remove)
+        bffe = correct_last_image_slices_based_on_t2(bffe, t2_axial_spacing, slices_to_remove)
+        rtdose = correct_last_image_slices_based_on_t2(rtdose, t2_axial_spacing, slices_to_remove)
+        oar_mask = correct_last_image_slices_based_on_t2(oar_mask, t2_axial_spacing, slices_to_remove)
+        app_mask = correct_last_image_slices_based_on_t2(app_mask, t2_axial_spacing, slices_to_remove)
 
     t2_min, t2_max = get_physical_corners(t2)
     bffe_min, bffe_max = get_physical_corners(bffe)
@@ -693,7 +717,8 @@ def process_and_save_patient(patient_index, patient_row_data, target_labels, dat
     bffe = DcmInputAdapter().ingest(item_paths['bffe'])
     rtdose = sitk.ReadImage(item_paths['dose'])
 
-    image, rtdose, mask = overlay_images_with_rtdose(t2, bffe, rtdose, **kwargs)
+    slices_to_remove = patient_row_data['slices to remove']
+    image, rtdose, mask = overlay_images_with_rtdose(t2, bffe, rtdose, slices_to_remove, **kwargs)
 
     # write image and mask to nii files
     print(f'    Writing image to {path_to_save_img_nifti_file}...')
