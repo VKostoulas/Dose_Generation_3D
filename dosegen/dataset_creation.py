@@ -705,9 +705,9 @@ def overlay_images_with_rtdose(t2, bffe, rtdose, slices_to_remove, **kwargs):
 def process_and_save_patient(patient_index, patient_row_data, target_labels, dataset_id, images_path, labels_path, doses_path):
     print(f"Processing data from patient {patient_row_data['patient id']}...")
 
-    path_to_save_img_nifti_file = images_path + dataset_id.lower() + f"_{patient_index:0=3d}.nii.gz"
-    path_to_save_mask_nifti_file = labels_path + dataset_id.lower() + f"_{patient_index:0=3d}.nii.gz"
-    path_to_save_dose_nifti_file = doses_path + dataset_id.lower() + f"_{patient_index:0=3d}.nii.gz"
+    path_to_save_img_nifti_file = os.path.join(images_path, dataset_id.lower(), f"_{patient_index:0=3d}.nii.gz")
+    path_to_save_mask_nifti_file = os.path.join(labels_path, dataset_id.lower(), f"_{patient_index:0=3d}.nii.gz")
+    path_to_save_dose_nifti_file = os.path.join(doses_path, dataset_id.lower(), f"_{patient_index:0=3d}.nii.gz")
 
     item_paths = get_item_paths(patient_row_data['folder path'])
     kwargs = {'target_labels': target_labels, 'rtstruct_path': item_paths['struct'], 'rtplan_path': item_paths['plan']}
@@ -745,9 +745,9 @@ def create_dataset_from_dicoms(data_path, save_path, patient_csv, target_labels,
     dataset_id = save_path.split('/')[-2].split('_')[-1]
 
     # create save folders
-    images_path = save_path + 'images/'
-    labels_path = save_path + 'labels/'
-    doses_path = save_path + 'doses/'
+    images_path = os.path.join(save_path, 'images')
+    labels_path = os.path.join(save_path, 'labels')
+    doses_path = os.path.join(save_path + 'doses')
     os.mkdir(save_path), os.mkdir(images_path), os.mkdir(labels_path), os.mkdir(doses_path)
 
     patient_data = get_patient_data_from_csv(patient_csv, data_path)
