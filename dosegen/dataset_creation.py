@@ -512,7 +512,7 @@ def resample_to_reference(image: sitk.Image, reference: sitk.Image, is_mask=Fals
         resample.SetOutputDirection(reference.GetDirection())
         resample.SetDefaultPixelValue(0)
         resample.SetTransform(sitk.Transform())
-        resample.SetInterpolator(sitk.sitkBSpline)
+        resample.SetInterpolator(sitk.sitkLinear)
         return resample.Execute(image)
 
 
@@ -533,7 +533,7 @@ def resample_mask_to_reference(mask_image: sitk.Image, reference: sitk.Image) ->
         resampler.SetOutputSpacing(reference.GetSpacing())
         resampler.SetOutputOrigin(reference.GetOrigin())
         resampler.SetOutputDirection(reference.GetDirection())
-        resampler.SetInterpolator(sitk.sitkLinear)
+        resampler.SetInterpolator(sitk.sitkLabelLinear)
         resampler.SetTransform(sitk.Transform())
         resampler.SetDefaultPixelValue(0.0)
 

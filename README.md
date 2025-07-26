@@ -77,13 +77,23 @@ and similarly all the results in dosegen_results.
 
 ### Dataset preparation
 
-- We follow initial dataset formats similar the [Medical Segmentation Decathlon](http://medicaldecathlon.com/)
+- We follow initial dataset formats similar the [Medical Segmentation Decathlon](http://medicaldecathlon.com/).
 - To train models with this library you must put all your files in a folder with a name
 of the form: TaskXXX_DatasetName, where XXX should be a 3-digit number, potentially
 starting with 0s. 
-- All the images, doses and label masks should be in .nii.gz format 
+- All the images, doses and label masks should be in .nii.gz format.
 - The images should be stored in a folder called 'images', the doses in one called 
 'doses' and the masks in a folder called 'labels'.
+
+[//]: # (python dosegen/dataset_creation.py )
+
+[//]: # (/exports/rt-ai-research-hpc/ekostoulas/datasets/CervixRTDatasetFinal/ )
+
+[//]: # (/exports/rt-ai-research-hpc/ekostoulas/datasets/raw/Task101_CervixDoseSmall/ )
+
+[//]: # (/exports/rt-ai-research-hpc/ekostoulas/datasets/CervixRTDatasetFinal/dataset_final_v3.csv )
+
+[//]: # ("background,applicator,needles,bladder,bowel,rectum,sigmoid")
 
 [//]: # (You must create a dataset based on nnU-Net conventions. You can start with )
 
