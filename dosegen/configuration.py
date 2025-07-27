@@ -528,7 +528,7 @@ def main():
 
     config = {'2d': config_2d, '3d': config_3d}
 
-    config_save_path = os.path.join(dataset_save_path, 'medimgen_config.yaml')
+    config_save_path = os.path.join(dataset_save_path, 'dosegen_config.yaml')
 
     # Custom Dumper to avoid anchors and enforce list formatting
     class CustomDumper(yaml.SafeDumper):
