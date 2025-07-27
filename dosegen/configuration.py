@@ -322,9 +322,9 @@ def process_patient(patient_id, patient_dict, save_path, median_shape, dose_glob
     image_chunks = (1, 1) + tuple(median_shape[-2:])
     label_or_dose_chunks = (1,) + tuple(median_shape[-2:])
     z_file = zarr.open(file_save_path, mode='w')
-    z_file.create_array(name='image', data=image.astype(np.float32), chunks=image_chunks, compressor=compressor, overwrite=True)
-    z_file.create_array(name='dose', data=dose.astype(np.float32), chunks=label_or_dose_chunks, compressor=compressor, overwrite=True)
-    z_file.create_array(name='label', data=label.astype(np.uint8), chunks=label_or_dose_chunks, compressor=compressor, overwrite=True)
+    z_file.create_array(name='image', data=image.astype(np.float32), chunks=image_chunks, compressors={"bytes": compressor}, overwrite=True)
+    z_file.create_array(name='dose', data=dose.astype(np.float32), chunks=label_or_dose_chunks, compressors={"bytes": compressor}, overwrite=True)
+    z_file.create_array(name='label', data=label.astype(np.uint8), chunks=label_or_dose_chunks, compressors={"bytes": compressor}, overwrite=True)
     z_file.attrs['properties'] = properties
 
     log_lines.append(f"    Saved processed image, dose, label and properties to {file_save_path}")
