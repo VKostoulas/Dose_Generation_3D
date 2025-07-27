@@ -6,6 +6,5 @@
 !README.md
 !pyproject.toml
 
-# Keep dosegen and all its contents
-!dosegen/
-!dosegen/**
+# Keep dosegen .py files
+!dosegen/*.py
