@@ -325,7 +325,7 @@ def process_patient(patient_id, patient_dict, save_path, median_shape, dose_glob
     z_file.create_array(name='image', data=image.astype(np.float32), chunks=image_chunks, compressors=compressor, overwrite=True)
     z_file.create_array(name='dose', data=dose.astype(np.float32), chunks=label_or_dose_chunks, compressors=compressor, overwrite=True)
     z_file.create_array(name='label', data=label.astype(np.uint8), chunks=label_or_dose_chunks, compressors=compressor, overwrite=True)
-    z_file.attrs['properties'] = properties
+    z_file.attrs['properties'] = clean_numpy_scalars(properties)
 
     log_lines.append(f"    Saved processed image, dose, label and properties to {file_save_path}")
 
