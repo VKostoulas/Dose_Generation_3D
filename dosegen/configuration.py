@@ -446,15 +446,16 @@ def main():
     # standardized folder name
     standardized_folder_name = f"Task{formatted_task_number}_" + "_".join(basename.split('_')[1:])
     dataset_save_path = os.path.join(os.getenv('dosegen_preprocessed'), standardized_folder_name)
+    data_save_path = os.path.join(dataset_save_path, 'data')
 
     if os.path.exists(dataset_save_path):
-        raise FileExistsError(f"Dataset {os.path.basename(dataset_path)} already exists.")
+        raise FileExistsError(f"Dataset {basename} already exists.")
 
     # Given dataset folder must have a name in the form TaskXXX_DatasetName
     # The dataset folder should always contain an 'images' folder, a 'doses' folder and a 'labels' folder
     # All the files should be .nii.gz files
 
-    os.makedirs(dataset_save_path, exist_ok=True)
+    os.makedirs(data_save_path, exist_ok=True)
 
     image_paths = glob.glob(os.path.join(dataset_path, 'images') + "/*.nii.gz")
     patient_ids = sorted([os.path.basename(path).replace('.nii.gz', '') for path in image_paths])
@@ -483,7 +484,7 @@ def main():
     median_shape, min_shape, max_shape = median_shape[1:], min_shape[1:], max_shape[1:]
 
     results = []
-    args_list = [(pid, patient_dict, dataset_save_path, median_shape, dose_global_minmax)
+    args_list = [(pid, patient_dict, data_save_path, median_shape, dose_global_minmax)
                  for pid in patient_ids]
 
     with ProcessPoolExecutor() as executor:
