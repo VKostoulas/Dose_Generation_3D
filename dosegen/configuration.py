@@ -318,8 +318,8 @@ def process_patient(patient_id, patient_dict, save_path, median_shape, dose_glob
 
     properties = {'class_locations': class_locations, 'image_min_max': image_min_max, 'norm_image_stats': norm_image_stats}
 
-    compressor = BloscCodec(cname='zstd', clevel=5, shuffle=BloscShuffle.bitshuffle)
-    image_chunks = (1, 1) + tuple(median_shape[-2:])
+    compressor = BloscCodec(cname='zstd', clevel=3, shuffle=BloscShuffle.bitshuffle)
+    image_chunks = (median_shape[0], 1) + tuple(median_shape[-2:])
     label_or_dose_chunks = (1,) + tuple(median_shape[-2:])
     z_file = zarr.open(file_save_path, mode='w')
     z_file.create_array(name='image', data=image.astype(np.float32), chunks=image_chunks, compressors=compressor, overwrite=True)
