@@ -276,7 +276,7 @@ def clean_numpy_scalars(obj):
         return obj
 
 
-def process_patient(patient_id, patient_dict, save_path, median_shape, dose_global_minmax):
+def process_patient(patient_id, patient_dict, save_path, dose_global_minmax):
     log_lines = [f"Processing {patient_id}..."]
 
     file_save_path = os.path.join(save_path, patient_id + '.zarr')
@@ -311,8 +311,8 @@ def process_patient(patient_id, patient_dict, save_path, median_shape, dose_glob
     properties = {'class_locations': class_locations, 'image_min_max': image_min_max, 'norm_image_stats': norm_image_stats}
 
     compressor = BloscCodec(cname='zstd', clevel=3, shuffle=BloscShuffle.bitshuffle)
-    image_chunks = (median_shape[0], 1) + tuple(median_shape[-2:])
-    label_or_dose_chunks = (1,) + tuple(median_shape[-2:])
+    image_chunks = image.shape
+    label_or_dose_chunks = label.shape
     z_file = zarr.open(file_save_path, mode='w')
     z_file.create_array(name='image', data=image.astype(np.float32), chunks=image_chunks, compressors=compressor, overwrite=True)
     z_file.create_array(name='dose', data=dose.astype(np.float32), chunks=label_or_dose_chunks, compressors=compressor, overwrite=True)
@@ -476,7 +476,7 @@ def main():
     median_shape, min_shape, max_shape = median_shape[1:], min_shape[1:], max_shape[1:]
 
     results = []
-    args_list = [(pid, patient_dict, data_save_path, median_shape, dose_global_minmax)
+    args_list = [(pid, patient_dict, data_save_path, dose_global_minmax)
                  for pid in patient_ids]
 
     with ProcessPoolExecutor() as executor:

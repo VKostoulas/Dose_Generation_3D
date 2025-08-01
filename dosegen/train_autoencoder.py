@@ -6,6 +6,7 @@ matplotlib.use('Agg')
 
 import os
 import json
+import random
 import tempfile
 import sys
 import glob
@@ -217,49 +218,113 @@ class AutoEncoder:
         return optimizer_g, optimizer_d, g_lr_scheduler, d_lr_scheduler
 
     def save_plots(self, image, reconstruction, plot_name):
-        save_path = os.path.join(self.config['results_path'], 'plots')
+        save_path = os.path.join(self.config['results_path'], 'plots', plot_name)
         os.makedirs(save_path, exist_ok=True)
 
-        is_3d = len(image.shape) == 5
+        is_3d = image.ndim == 5  # (B, C, D, H, W) or (B, C, H, W)
+        B, C = image.shape[:2]
+
+        label_mode = 'label' in self.config['gen_mode']
+        if label_mode:
+            n_label_channels = self.config['dataset_config']['n_classes'] + 1
+            image_labels = image[:, -n_label_channels:]
+            recon_labels = reconstruction[:, -n_label_channels:]
+            image = image[:, :-n_label_channels]
+            reconstruction = reconstruction[:, :-n_label_channels]
+
+            # Convert one-hot to mask
+            image_masks = torch.argmax(image_labels, dim=1)  # (B, D, H, W) or (B, H, W)
+            recon_masks = torch.argmax(recon_labels, dim=1)
 
         if is_3d:
-            plot_save_path = os.path.join(save_path, f'{plot_name}.gif')
-            num_slices = image.shape[2]  # Assuming the image is [batch, channel, x, y, z]
-            gif_images = []
+            for idx in range(min(2, B)):
+                for ch in range(C):
+                    gif_images = []
+                    img_vol = image[idx, ch]
+                    recon_vol = reconstruction[idx, ch]
+                    D = img_vol.shape[0]
 
-            for slice_idx in range(num_slices):
-                plt.figure(figsize=(4, 2))  # Adjusting the figsize for side-by-side plots
-                # Plot the original image slice
-                slice_image = image.cpu()[0, 0, slice_idx, :, :]
-                plt.subplot(1, 2, 1)
-                plt.imshow(slice_image, vmin=0, vmax=1, cmap="gray")
-                plt.title("Image")
-                plt.axis("off")
-                # Plot the reconstruction slice
-                slice_reconstruction = reconstruction.cpu()[0, 0, slice_idx, :, :]
-                plt.subplot(1, 2, 2)
-                plt.imshow(slice_reconstruction, vmin=0, vmax=1, cmap="gray")
-                plt.title("Reconstruction")
-                plt.axis("off")
+                    for slice_idx in range(D):
+                        fig, axs = plt.subplots(1, 2, figsize=(4, 2))
+                        axs[0].imshow(img_vol[slice_idx].cpu(), cmap='gray', vmin=0, vmax=1)
+                        axs[0].set_title("Image")
+                        axs[0].axis("off")
 
-                buffer = BytesIO()
-                plt.tight_layout()
-                plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight', pad_inches=0)
-                plt.close()
+                        axs[1].imshow(recon_vol[slice_idx].cpu(), cmap='gray', vmin=0, vmax=1)
+                        axs[1].set_title("Reconstruction")
+                        axs[1].axis("off")
 
-                buffer.seek(0)
-                gif_image = Image.open(buffer).copy()  # Fully load the image into memory
-                gif_images.append(gif_image)
-                buffer.close()
+                        buffer = BytesIO()
+                        plt.tight_layout()
+                        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight', pad_inches=0)
+                        plt.close(fig)
 
-            # Create GIF from the list of images
-            create_gif_from_images(gif_images, plot_save_path)
+                        buffer.seek(0)
+                        gif_image = Image.open(buffer).copy()
+                        gif_images.append(gif_image)
+                        buffer.close()
+
+                    gif_path = os.path.join(save_path, f"sample{idx}_channel{ch}.gif")
+                    create_gif_from_images(gif_images, gif_path)
+
+                if label_mode:
+                    gif_images_label = []
+                    img_mask_vol = image_masks[idx]
+                    recon_mask_vol = recon_masks[idx]
+                    D = img_mask_vol.shape[0]
+                    for slice_idx in range(D):
+                        fig, axs = plt.subplots(1, 2, figsize=(4, 2))
+                        axs[0].imshow(img_mask_vol[slice_idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                        axs[0].set_title("Image Label")
+                        axs[0].axis("off")
+
+                        axs[1].imshow(recon_mask_vol[slice_idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                        axs[1].set_title("Recon Label")
+                        axs[1].axis("off")
+
+                        buffer = BytesIO()
+                        plt.tight_layout()
+                        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight', pad_inches=0)
+                        plt.close(fig)
+
+                        buffer.seek(0)
+                        gif_image = Image.open(buffer).copy()
+                        gif_images_label.append(gif_image)
+                        buffer.close()
+
+                    gif_path = os.path.join(save_path, f"sample{idx}_labels.gif")
+                    create_gif_from_images(gif_images_label, gif_path)
 
         else:
-            slice_image = image.cpu()[0, 0, :, :]
-            slice_reconstruction = reconstruction.cpu()[0, 0, :, :]
-            plot_save_path = os.path.join(save_path, f'{plot_name}.png')
-            create_2d_image_reconstruction_plot(slice_image, slice_reconstruction, save_path=plot_save_path)
+            indices = random.sample(range(B), min(4, B))
+            for idx in indices:
+                fig, axs = plt.subplots(C, 2, figsize=(5, 2 * C))
+                for ch in range(C):
+                    axs[ch, 0].imshow(image[idx, ch].cpu(), cmap='gray', vmin=0, vmax=1)
+                    axs[ch, 0].set_title(f"Image Ch {ch}")
+                    axs[ch, 0].axis("off")
+
+                    axs[ch, 1].imshow(reconstruction[idx, ch].cpu(), cmap='gray', vmin=0, vmax=1)
+                    axs[ch, 1].set_title(f"Recon Ch {ch}")
+                    axs[ch, 1].axis("off")
+
+                fig.tight_layout()
+                plt.savefig(os.path.join(save_path, f"sample{idx}.png"), dpi=300)
+                plt.close(fig)
+
+                if label_mode:
+                    fig, axs = plt.subplots(1, 2, figsize=(5, 2))
+                    axs[0].imshow(image_masks[idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                    axs[0].set_title("Image Label")
+                    axs[0].axis("off")
+
+                    axs[1].imshow(recon_masks[idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                    axs[1].set_title("Recon Label")
+                    axs[1].axis("off")
+
+                    fig.tight_layout()
+                    plt.savefig(os.path.join(save_path, f"sample{idx}_labels.png"), dpi=300)
+                    plt.close(fig)
 
     def save_model(self, epoch, validation_loss, optimizer, discriminator, disc_optimizer, scheduler=None,
                    disc_scheduler=None):
