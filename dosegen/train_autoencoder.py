@@ -448,7 +448,7 @@ def get_config_for_current_task(dataset_id, model_type, gen_mode, progress_bar, 
     config = config[model_type]
 
     dataset_folder_name = preprocessed_dataset_path.split('/')[-2]
-    results_path = os.path.join(os.getenv('dosegen_results'), dataset_folder_name, model_type, 'autoencoder')
+    results_path = os.path.join(os.getenv('dosegen_results'), dataset_folder_name, model_type, 'autoencoder', gen_mode)
     if os.path.exists(results_path) and not continue_training:
         raise FileExistsError(f"Results path {results_path} already exists.")
 
