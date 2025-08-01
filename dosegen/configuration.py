@@ -81,22 +81,35 @@ def compute_output_size(input_size, downsample_parameters):
     return output_size
 
 
-def get_patch_sizes(dataset_config):
-    median_image_size = dataset_config['median_shape']
-    max_image_size = dataset_config['max_shape']
-    # For 2d, for each axis, use as size the closest multiple of 2, 3, 5 or 7 by powers of 2, to the corresponding size of max patch size
-    valid_2d_sizes = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512]
-    patch_size_2d = [min(valid_2d_sizes, key=lambda x: abs(x - size)) for size in max_image_size]
-    # For 3d, for each axis, use as size the closest multiple of 2, 3, or 7 by 2, to the corresponding size of nnunet median patch size
-    valid_3d_sizes = [32, 48, 56, 64, 96, 112, 128, 192, 224, 256, 384, 448, 512]
-    patch_size_3d = [min(valid_3d_sizes, key=lambda x: abs(x - size)) for size in median_image_size]
-    return patch_size_2d, patch_size_3d
+def get_ae_n_layers(max_image_size):
+    # use maximum of 3 autoencoder downsampling layers
+    # we want the latent dims to be less than 100 to be manageable (say less than 96)
+    if np.max(max_image_size) <= 96:
+        ae_n_layers = 1
+    elif np.max(max_image_size) <= 384:
+        ae_n_layers = 2
+    else:
+        ae_n_layers = 3
+
+    return ae_n_layers
 
 
-def create_autoencoder_dict(dataset_config, spatial_dims):
-    patch_size_2d, patch_size_3d = get_patch_sizes(dataset_config)
-    patch_size = patch_size_2d[1:] if spatial_dims == 2 else patch_size_3d
+def get_patch_size(max_image_size):
+    # For each max dim, find the closest integer smaller than dim which can be divided by 2**(ae_n_layers + 2)
+    # (number of autoencoder downsample layers and 2 downsample layers from the DDPM)
+    ae_n_layers = get_ae_n_layers(max_image_size)
 
+    patch_size = []
+    for size in max_image_size:
+        while size % 2**(ae_n_layers + 2) != 0:
+            size -= 1
+        patch_size.append(size)
+
+    return patch_size
+
+
+def create_vae_dict(max_image_size, spatial_dims):
+    vae_n_layers = get_ae_n_layers(max_image_size)
     base_autoencoder_channels = [64, 128, 256, 256] if spatial_dims == 2 else [32, 64, 128, 128]
 
     vae_dict = {'spatial_dims': spatial_dims,
@@ -106,68 +119,46 @@ def create_autoencoder_dict(dataset_config, spatial_dims):
                 'with_decoder_nonlocal_attn': False,
                 'use_flash_attention': False,
                 'use_checkpointing': False,
-                'use_convtranspose': False
-               }
+                'use_convtranspose': False,
+                'num_channels': base_autoencoder_channels[:vae_n_layers + 1],
+                'attention_levels': [False] * (vae_n_layers + 1),
+                'norm_num_groups': 16}
 
-    # use maximum of 3 autoencoder downsampling layers
-    # we want the latent dims to be less than 100 to be manageable (say less than 96)
-    if np.max(patch_size) <= 96:
-        vae_n_layers = 1
-    elif np.max(patch_size) <= 384:
-        vae_n_layers = 2
-    else:
-        vae_n_layers = 3
-
-    vae_dict['num_channels'] = base_autoencoder_channels[:vae_n_layers+1]
-    vae_dict['attention_levels'] = [False] * (vae_n_layers+1)
-    vae_dict['norm_num_groups'] = 16
-
-    downsample_parameters = compute_downsample_parameters(patch_size, vae_n_layers + 1)
-    vae_dict['downsample_parameters'] = downsample_parameters
-    vae_dict['upsample_parameters'] = list(reversed(downsample_parameters))[:-1]
     return vae_dict
 
 
-def create_ddpm_dict(dataset_config, spatial_dims):
-    patch_size_2d, patch_size_3d = get_patch_sizes(dataset_config)
-    patch_size = patch_size_2d[1:] if spatial_dims == 2 else patch_size_3d
+def create_vqvae_dict(max_image_size, spatial_dims):
+    vqvae_n_layers = get_ae_n_layers(max_image_size)
+    base_autoencoder_channels = [64, 128, 256, 256] if spatial_dims == 2 else [32, 64, 128, 128]
 
+    vqvae_dict = {'spatial_dims': spatial_dims,
+                  'channels': base_autoencoder_channels[:vqvae_n_layers + 1],
+                  'num_res_layers': 2,
+                  'num_res_channels': base_autoencoder_channels[:vqvae_n_layers + 1],
+                  'num_embeddings': 8,
+                  'embedding_dim': 128,
+                  'commitment_cost': 0.25,
+                  'use_checkpointing': False}
+    return vqvae_dict
+
+
+def create_ddpm_dict(spatial_dims):
     ddpm_dict = {'spatial_dims': spatial_dims,
                  'in_channels': 8,
                  'out_channels': 8,
                  'num_res_blocks': 2,
                  'use_flash_attention': False,
-                }
-
-    # use maximum of 3 autoencoder downsampling layers
-    # we want the latent dims to be less than 100 to be managable (say less than 96)
-    if np.max(patch_size) <= 96:
-        vae_n_layers = 1
-    elif np.max(patch_size) <= 384:
-        vae_n_layers = 2
-    else:
-        vae_n_layers = 3
-
-    ddpm_dict['num_channels'] = [256, 512, 768]
-    ddpm_dict['attention_levels'] = [False, True, True]
-    ddpm_dict['num_head_channels'] = [0, 512, 768]
-
-    vae_down_params = compute_downsample_parameters(patch_size, vae_n_layers + 1)
-    latent_size = compute_output_size(patch_size, vae_down_params)
-    ddpm_down_params = compute_downsample_parameters(latent_size, 3)
-
-    ddpm_dict['strides'] = [item[0] for item in ddpm_down_params]
-    ddpm_dict['kernel_sizes'] = [item[1] for item in ddpm_down_params]
-    ddpm_dict['paddings'] = [item[2] for item in ddpm_down_params]
-
+                 'channels': [256, 512, 768],
+                 'attention_levels': [False, True, True],
+                 'num_head_channels': [0, 512, 768]}
     return ddpm_dict
 
 
-def create_config_dict(dataset_config, autoencoder_dict, ddpm_dict):
-    patch_size_2d, patch_size_3d = get_patch_sizes(dataset_config)
-    patch_size = patch_size_2d[1:] if autoencoder_dict['spatial_dims'] == 2 else patch_size_3d
+def create_config_dict(dataset_config, vae_dict, vqvae_dict, ddpm_dict, spatial_dims):
+    patch_size = get_patch_size(dataset_config['max_shape'])
+    patch_size = patch_size[1:] if spatial_dims == 2 else patch_size
 
-    print(f"Patch size {autoencoder_dict['spatial_dims']}D: {patch_size}")
+    print(f"Patch size {spatial_dims}D: {patch_size}")
 
     ae_transformations = {
         "patch_size": patch_size,
@@ -182,7 +173,6 @@ def create_config_dict(dataset_config, autoencoder_dict, ddpm_dict):
         "mirror": True,
         "dummy_2d": False
     }
-    # not using augmentations for ddpm training
     ddpm_transformations = {
         "patch_size": patch_size,
         "scaling": True,
@@ -197,18 +187,18 @@ def create_config_dict(dataset_config, autoencoder_dict, ddpm_dict):
         "dummy_2d": False
     }
 
-    if autoencoder_dict['spatial_dims'] == 2:
+    if spatial_dims == 2:
         perceptual_params = {'spatial_dims': 2, 'network_type': "vgg"}
     else:
         perceptual_params = {'spatial_dims': 3, 'network_type': "vgg", 'is_fake_3d': True, 'fake_3d_ratio': 0.2}
 
-    discriminator_params = {'spatial_dims': autoencoder_dict['spatial_dims'], 'out_channels': 1, 'num_channels': 64, 'num_layers_d': 3}
+    discriminator_params = {'spatial_dims': spatial_dims, 'out_channels': 1, 'num_channels': 64, 'num_layers_d': 3}
 
-    # adjust the number of epochs based on the training model (2d/3d) and number of training data
-    n_epochs = 300 if autoencoder_dict['spatial_dims'] == 3 else 200
+    # adjust parameters based on the training model (2d/3d) and number of training data
+    n_epochs = 300 if spatial_dims == 3 else 200
     n_epochs = n_epochs * 2 if dataset_config['n_patients'] > 300 else n_epochs
 
-    ae_batch_size = 24 if autoencoder_dict['spatial_dims'] == 2 else 2
+    ae_batch_size = 24 if spatial_dims == 2 else 2
     ddpm_batch_size = 24 if ddpm_dict['spatial_dims'] == 2 else 4
     grad_accumulate_step = 1
 
@@ -230,14 +220,16 @@ def create_config_dict(dataset_config, autoencoder_dict, ddpm_dict):
         'ae_learning_rate': 1e-4,
         'd_learning_rate': 1e-4,
         'autoencoder_warm_up_epochs': 5,
-        'adv_weight': 0.01,
-        'perc_weight': 0.5 if autoencoder_dict['spatial_dims'] == 2 else 0.125,
-        'kl_weight': 1e-6 if autoencoder_dict['spatial_dims'] == 2 else 1e-7,
-        'vae_params': autoencoder_dict,
+        'vae_params': vae_dict,
+        'vqvae_params': vqvae_dict,
         'perceptual_params': perceptual_params,
         'discriminator_params': discriminator_params,
         'ddpm_learning_rate': 5e-5,
-        'ddpm_params': ddpm_dict
+        'ddpm_params': ddpm_dict,
+        'adv_weight': 0.01,
+        'perc_weight': 0.5 if spatial_dims == 2 else 0.125,
+        'kl_weight': 1e-6 if spatial_dims == 2 else 1e-7,
+        'q_weight': 1
     }
     return config
 
@@ -517,14 +509,17 @@ def main():
 
     print(f"\nConfiguring image generation parameters for Dataset ID: {formatted_task_number}")
 
-    vae_dict_2d = create_autoencoder_dict(dataset_config, spatial_dims=2)
-    vae_dict_3d = create_autoencoder_dict(dataset_config, spatial_dims=3)
+    vae_dict_2d = create_vae_dict(dataset_config['max_shape'], spatial_dims=2)
+    vae_dict_3d = create_vae_dict(dataset_config['max_shape'], spatial_dims=3)
 
-    ddpm_dict_2d = create_ddpm_dict(dataset_config, spatial_dims=2)
-    ddpm_dict_3d = create_ddpm_dict(dataset_config, spatial_dims=3)
+    vqvae_dict_2d = create_vqvae_dict(dataset_config['max_shape'], spatial_dims=2)
+    vqvae_dict_3d = create_vqvae_dict(dataset_config['max_shape'], spatial_dims=3)
 
-    config_2d = create_config_dict(dataset_config, vae_dict_2d, ddpm_dict_2d)
-    config_3d = create_config_dict(dataset_config, vae_dict_3d, ddpm_dict_3d)
+    ddpm_dict_2d = create_ddpm_dict(spatial_dims=2)
+    ddpm_dict_3d = create_ddpm_dict(spatial_dims=3)
+
+    config_2d = create_config_dict(dataset_config, vae_dict_2d, vqvae_dict_2d, ddpm_dict_2d, spatial_dims=2)
+    config_3d = create_config_dict(dataset_config, vae_dict_3d, vqvae_dict_3d, ddpm_dict_3d, spatial_dims=3)
 
     config = {'2d': config_2d, '3d': config_3d}
 

@@ -1,13 +1,12 @@
-import os
-import tempfile
-
-
 import warnings
 warnings.filterwarnings("ignore")
 
 import matplotlib
 matplotlib.use('Agg')
 
+import os
+import json
+import tempfile
 import sys
 import glob
 import torch
@@ -23,13 +22,11 @@ from tqdm import tqdm
 from torch.nn import L1Loss
 from torchinfo import summary
 from torch.cuda.amp import GradScaler, autocast
-from generative.networks.nets import VQVAE, PatchDiscriminator
-from generative.losses import PatchAdversarialLoss, PerceptualLoss
+from monai.networks.nets import AutoencoderKL, VQVAE, PatchDiscriminator
+from monai.losses import PatchAdversarialLoss, PerceptualLoss
 
-from medimgen.data_processing import get_data_loaders
-from medimgen.autoencoderkl_with_strides import AutoencoderKL
-from medimgen.utils import load_config
-from medimgen.utils import create_2d_image_reconstruction_plot, create_gif_from_images, save_all_losses
+from dosegen.data_processing import get_data_loaders
+from dosegen.utils import load_config, create_2d_image_reconstruction_plot, create_gif_from_images, save_all_losses
 
 
 class AutoEncoder:
@@ -71,270 +68,12 @@ class AutoEncoder:
         kl_loss = torch.sum(kl_loss, dim=spatial_dims)
         return torch.sum(kl_loss) / kl_loss.shape[0]
 
-    # def adapt_kl_loss(self, epoch):
-    #     # adaptive kl_loss_weight based on difference with half the reconstruction loss
-    #     if epoch > 1:
-    #         current_rec = self.loss_dict['rec_loss'][-1]
-    #
-    #         w_current = self.config['kl_weight']
-    #         current_kl = self.loss_dict['reg_loss'][-1]
-    #
-    #         # growth factor so that maximum kl weight value is reached around half of the training:
-    #         # (max_allowed_kl_loss_weight_value / initial_kl_loss_weight_value)^(1/half_epochs)
-    #         # with max_allowed_kl_loss_weight_value = (rec_loss / kl_loss) and initial_kl_loss_weight_value = 1e-10
-    #         # --> (1e-4 / 1e-10)^(1/half_epochs) = 10^(6/half_epochs)
-    #         # gf = 10 ** (6 / (self.config['n_epochs'] // 2))
-    #         gf = ((current_rec / (current_kl / w_current)) / 1e-10)**(1 / (self.config['n_epochs'] // 2))
-    #
-    #         # adaptive direction based on reconstruction loss / 2
-    #         if current_kl < current_rec / 2:
-    #             w_new = w_current * gf
-    #         else:
-    #             w_new = w_current / gf
-    #
-    #         self.config['kl_weight'] = w_new
-    #         print(f"KL loss weight updated: {self.config['kl_weight']}")
 
-    # def adapt_kl_loss(self, epoch):
-    #     # adaptive kl_loss_weight based on difference with half the reconstruction loss
-    #     if epoch == 2:
-    #         current_kl = self.loss_dict['reg_loss'][-1]
-    #         w_current = self.config['kl_weight']
-    #         target_kl = 5e-3
-    #         new_kl_w = target_kl / (current_kl / w_current)
-    #         self.config['kl_weight'] = new_kl_w
-    #         print(f"KL loss weight updated: {self.config['kl_weight']}")
-
-    # def adapt_kl_loss(self, epoch):
-    #     # adaptive kl_loss_weight based on difference with half the reconstruction loss
-    #     if epoch > 1:
-    #         current_rec = self.loss_dict['rec_loss'][-1]
-    #         current_kl = self.loss_dict['reg_loss'][-1]
-    #         # define the epoch that we want the kl loss to reach the maximum value: at 3/4 of training
-    #         target_epoch = int(0.75 * self.config['n_epochs'])
-    #         remaining_epochs = max(target_epoch - epoch, 1)
-    #         # current weight
-    #         w_current = self.config['kl_weight']
-    #         # desired weight so that w*kl = rec/2
-    #         w_target = (current_rec / 2.0) / (current_kl / w_current)
-    #
-    #         r = (w_target / w_current) ** (1.0 / remaining_epochs)
-    #         w_new = w_current * r
-    #         # if kl loss gets bigger than reconstruction loss, clamp it
-    #         w_new = min(w_new, w_target)
-    #
-    #         self.config['kl_weight'] = w_new
-    #         print(f"KL loss weight updated: {self.config['kl_weight']}")
-
-    # def adapt_kl_loss(self, epoch):
-    #     # adaptive kl_loss_weight based on difference with half the reconstruction loss
-    #     if epoch > 1 and not self.loss_dict['reg_loss'][-1] > self.loss_dict['rec_loss'][-1] / 2:
-    #         self.config['kl_weight'] = self.config['kl_weight'] * 2
-    #         print(f"KL loss weight updated: {self.config['kl_weight']}")
-
-    # def adapt_kl_loss(self, epoch):
-    #     """
-    #     Epoch is 1-based. Must be called after you append
-    #     the latest rec_loss/reg_loss to self.loss_dict.
-    #     """
-    #     if epoch < 2:
-    #         self.config['kl_weight'] = 1e-12
-    #     else:
-    #         rec_prev = self.loss_dict['rec_loss'][-1]
-    #         kl_prev  = self.loss_dict['reg_loss'][-1]
-    #         mid_epoch = self.config['n_epochs'] // 2
-    #
-    #         # Compute θ depending on which half we're in
-    #         if epoch <= mid_epoch:
-    #             # map [1→mid] to [0→π/2]
-    #             theta = (epoch - 1) / (mid_epoch - 1) * (np.pi / 2)
-    #         else:
-    #             # map [mid+1→total] to [π/2→3π/4]
-    #             theta = (np.pi / 2) + (epoch - mid_epoch) / (self.config['n_epochs'] - mid_epoch) * (np.pi / 4)
-    #
-    #         factor = np.sin(theta)  # in [0→1→0.707]
-    #         target_kl_contribution = factor * rec_prev  # capped at reconstruction loss
-    #
-    #         # solve for the weight that would give exactly that contribution, adjusted based on the current factor:
-    #         kl_weight = target_kl_contribution / (kl_prev / self.config['kl_weight']) * factor
-    #
-    #         self.config['kl_weight'] = kl_weight
-    #         print(f"KL loss weight updated: {self.config['kl_weight']}")
-
-    # def adapt_kl_loss_weight(self, epoch, step, kl_loss):
-    #     """
-    #
-    #     """
-    #     rec_prev = self.loss_dict['rec_loss'][-1]
-    #     kl_prev  = self.loss_dict['reg_loss'][-1]
-    #
-    #     w_min = 1e-5 / expected_kl
-    #     self.w_max = kl_max   / expected_kl
-    #     self.cycles = cycles
-    #
-    #
-    #     factor = np.sin(theta)  # in [0→1→0.707]
-    #     target_kl_contribution = factor * rec_prev  # capped at reconstruction loss
-    #
-    #     # solve for the weight that would give exactly that contribution, adjusted based on the current factor:
-    #     kl_weight = target_kl_contribution / (kl_prev / self.config['kl_weight']) * factor
-    #
-    #     self.config['kl_weight'] = kl_weight
-    #     print(f"KL loss weight updated: {self.config['kl_weight']}")
-
-    # def tune_kl_loss_weight(self, reconstruction_loss, kl_loss):
-    #     """
-    #     Dynamically adjusts KL loss weight based on its relative scale to the reconstruction loss.
-    #     Updates self.config['kl_weight'] in-place.
-    #     """
-    #     increase_factor = 1.05  # Slow upward adjustment
-    #     reduction_factor = 0.95  # Faster downward adjustment
-    #     min_weight = 1e-9
-    #     max_weight = 1e-6
-    #
-    #     # Initialize kl_weight if not set
-    #     # if 'kl_weight' not in self.config or self.config['kl_weight'] is None:
-    #     #     self.config['kl_weight'] = min_weight + (max_weight - min_weight) / 2
-    #
-    #     kl_weight = self.config['kl_weight']
-    #     kl_value = kl_loss.item()
-    #     rec_value = reconstruction_loss.item()
-    #
-    #     max_frac = 0.1
-    #     min_frac = 0.001
-    #
-    #     if kl_value > rec_value * max_frac:
-    #         kl_weight *= reduction_factor
-    #     elif kl_value < rec_value * min_frac:
-    #         kl_weight *= increase_factor
-    #
-    #     # Clamp to avoid extremes
-    #     kl_weight = max(min(kl_weight, max_weight), min_weight)
-    #
-    #     self.config['kl_weight'] = kl_weight
-
-    # def adapt_kl_loss_weight(self, val_loader):
-    #     print('Setting KL loss weight...')
-    #     self.autoencoder.eval()
-    #     total_rec_loss = 0
-    #     total_kl_loss = 0
-    #     disable_prog_bar = self.config['output_mode'] == 'log' or not self.config['progress_bar']
-    #
-    #     with tqdm(enumerate(val_loader), total=len(val_loader), ncols=100, disable=disable_prog_bar, file=sys.stdout) as val_progress_bar:
-    #         for step, batch in val_progress_bar:
-    #             images = batch["image"].to(self.device)
-    #
-    #             with torch.no_grad():
-    #                 with autocast(enabled=True):
-    #                     reconstructions, z_mu, z_sigma = self.autoencoder(images)
-    #                     kl_loss = self.get_kl_loss(z_mu, z_sigma)
-    #                     rec_loss = self.l1_loss(reconstructions.float(), images.float())
-    #             total_rec_loss += rec_loss.item()
-    #             total_kl_loss += kl_loss.item()
-    #             val_progress_bar.set_postfix({"rec_loss": total_rec_loss / (step + 1), "kl_loss": total_kl_loss / (step + 1)})
-    #
-    #     total_rec_loss = total_rec_loss / len(val_loader)
-    #     total_kl_loss = total_kl_loss / len(val_loader)
-    #
-    #     # this is tuned on Brain Tumour
-    #     kl_weight_raw = (0.001 * np.log(10 + total_rec_loss)) / total_kl_loss
-    #     # quantize the kl loss weight
-    #     kl_weight_quantized = min([1e-8, 1e-7, 1e-6], key=lambda x: abs(x - kl_weight_raw))
-    #     self.config['kl_weight'] = kl_weight_quantized
-    #     print(f"Raw KL loss weight: {kl_weight_raw}")
-    #     print(f"KL loss weight set to: {self.config['kl_weight']}")
-
-    # def adapt_kl_and_perceptual_loss_weights(self, val_loader, perceptual_loss):
-    #     print('Setting KL & Perceptual loss weights...')
-    #     self.autoencoder.eval()
-    #     total_rec_loss = 0
-    #     total_kl_loss = 0
-    #     total_perc_loss = 0
-    #     disable_prog_bar = self.config['output_mode'] == 'log' or not self.config['progress_bar']
-    #
-    #     with tqdm(enumerate(val_loader), total=len(val_loader), ncols=100, disable=disable_prog_bar,
-    #               file=sys.stdout) as val_progress_bar:
-    #         for step, batch in val_progress_bar:
-    #             images = batch["image"].to(self.device)
-    #
-    #             with torch.no_grad():
-    #                 with autocast(enabled=True):
-    #                     reconstructions, z_mu, z_sigma = self.autoencoder(images)
-    #                     kl_loss = self.get_kl_loss(z_mu, z_sigma)
-    #                     rec_loss = self.l1_loss(reconstructions.float(), images.float())
-    #                     perc_loss = perceptual_loss(reconstructions.float(), images.float())
-    #             total_rec_loss += rec_loss.item()
-    #             total_kl_loss += kl_loss.item()
-    #             total_perc_loss += perc_loss.item()
-    #             val_progress_bar.set_postfix(
-    #                 {"rec_loss": total_rec_loss / (step + 1), "kl_loss": total_kl_loss / (step + 1), "perc_loss": total_perc_loss / (step + 1)})
-    #
-    #     total_rec_loss = total_rec_loss / len(val_loader)
-    #     total_kl_loss = total_kl_loss / len(val_loader)
-    #     total_perc_loss = total_perc_loss / len(val_loader)
-    #
-    #     def decompose_to_base_and_exponent(x):
-    #         import math
-    #         exponent = math.floor(math.log10(abs(x)))
-    #         base = x / (10 ** exponent)
-    #         return base, exponent
-    #
-    #     kl_base, kl_exponent = decompose_to_base_and_exponent(total_kl_loss)
-    #     # this is tuned on Brain Tumour
-    #     self.config['kl_weight'] = 0.001 / (10 ** kl_exponent)
-    #     print(f"KL loss weight set to: {self.config['kl_weight']}")
-    #
-    #     perc_weight = 1
-    #     while not perc_weight * total_perc_loss < total_rec_loss:
-    #         perc_weight /= 2
-    #
-    #     self.config['perc_weight'] = perc_weight
-    #     print(f"Perceptual loss weight set to: {self.config['perc_weight']}")
-
-
-    def adapt_kl_loss_weight(self, val_loader):
-        if 'kl_weight' in self.config.keys():
-            print(f"KL loss weight manually set to: {self.config['kl_weight']}")
-        else:
-            print('Setting KL loss weight...')
-            self.autoencoder.eval()
-            total_kl_loss = 0
-            disable_prog_bar = self.config['output_mode'] == 'log' or not self.config['progress_bar']
-
-            with tqdm(enumerate(val_loader), total=len(val_loader), ncols=100, disable=disable_prog_bar,
-                      file=sys.stdout) as val_progress_bar:
-                for step, batch in val_progress_bar:
-                    images = batch["image"].to(self.device)
-
-                    with torch.no_grad():
-                        with autocast(enabled=True):
-                            reconstructions, z_mu, z_sigma = self.autoencoder(images)
-                            kl_loss = self.get_kl_loss(z_mu, z_sigma)
-                    total_kl_loss += kl_loss.item()
-                    val_progress_bar.set_postfix(
-                        {"kl_loss": total_kl_loss / (step + 1)})
-
-            total_kl_loss = total_kl_loss / len(val_loader)
-
-            def decompose_to_base_and_exponent(x):
-                import math
-                exponent = math.floor(math.log10(abs(x)))
-                base = x / (10 ** exponent)
-                return base, exponent
-
-            kl_base, kl_exponent = decompose_to_base_and_exponent(total_kl_loss)
-            # this is tuned on Brain Tumour
-            self.config['kl_weight'] = 0.001 / (10 ** kl_exponent)
-            print(f"KL loss weight set to: {self.config['kl_weight']}")
-
-
-    def train_one_epoch(self, epoch, train_loader, discriminator, perceptual_loss, optimizer_g, optimizer_d, scaler_g,
-                        scaler_d):
+    def train_one_epoch(self, epoch, train_loader, discriminator, perceptual_loss, optimizer_g, optimizer_d, scaler_g, scaler_d):
         self.autoencoder.train()
         discriminator.train()
         epoch_loss_dict = {'rec_loss': 0, 'reg_loss': 0, 'gen_loss': 0, 'disc_loss': 0, 'perc_loss': 0}
         disable_prog_bar = self.config['output_mode'] == 'log' or not self.config['progress_bar']
-        # self.adapt_kl_loss(epoch)
         start = time.time()
 
         with tqdm(enumerate(train_loader), total=len(train_loader), ncols=150, disable=disable_prog_bar, file=sys.stdout) as progress_bar:
@@ -343,12 +82,11 @@ class AutoEncoder:
             optimizer_g.zero_grad(set_to_none=True)
             optimizer_d.zero_grad(set_to_none=True)
             for step, batch in progress_bar:
-                images = batch["image"].to(self.device)
+                images = batch["input"].to(self.device)
                 step_loss_dict = {}
 
                 reconstructions = self.train_generator_step(discriminator, epoch, images, optimizer_g, perceptual_loss,
                                                             scaler_g, step, step_loss_dict, train_loader)
-                # Discriminator part
                 self.train_discriminator_step(discriminator, epoch, images, optimizer_d, reconstructions, scaler_d,
                                               step, step_loss_dict, train_loader)
                 for key in step_loss_dict:
@@ -402,7 +140,7 @@ class AutoEncoder:
             param.requires_grad = False
         for param in self.autoencoder.parameters():
             param.requires_grad = True
-        # Generator part
+
         with autocast(enabled=True):
             if isinstance(self.autoencoder, VQVAE):
                 reconstructions, quantization_loss = self.autoencoder(images)
@@ -412,7 +150,6 @@ class AutoEncoder:
                 step_loss_dict['reg_loss'] = self.get_kl_loss(z_mu, z_sigma) * self.config['kl_weight']
 
             step_loss_dict['rec_loss'] = self.l1_loss(reconstructions.float(), images.float())
-            # self.tune_kl_loss_weight(reconstruction_loss=step_loss_dict['rec_loss'], kl_loss=step_loss_dict['reg_loss'])
             step_loss_dict['perc_loss'] = perceptual_loss(reconstructions.float(), images.float()) * self.config['perc_weight']
             loss_g = step_loss_dict['rec_loss'] + step_loss_dict['perc_loss'] + step_loss_dict['reg_loss']
 
@@ -421,8 +158,7 @@ class AutoEncoder:
                 step_loss_dict['gen_loss'] = self.adv_loss(logits_fake, target_is_real=True, for_discriminator=False) * \
                                              self.config['adv_weight']
                 loss_g += step_loss_dict['gen_loss']
-                # print(self.get_kl_loss(z_mu, z_sigma) * self.config['kl_weight'], recons_loss, p_loss * self.config['perc_weight'], generator_loss * self.config['adv_weight'])
-                # print(quantization_loss * self.config['q_weight'], recons_loss, p_loss * self.config['perc_weight'], generator_loss * self.config['adv_weight'])
+
         scaler_g.scale(loss_g).backward()
         if (step + 1) % self.config['grad_accumulate_step'] == 0 or (step + 1) == len(train_loader):
             # gradient clipping
@@ -443,7 +179,7 @@ class AutoEncoder:
 
         with tqdm(enumerate(val_loader), total=len(val_loader), ncols=100, disable=disable_prog_bar, file=sys.stdout) as val_progress_bar:
             for step, batch in val_progress_bar:
-                images = batch["image"].to(self.device)
+                images = batch["input"].to(self.device)
 
                 with torch.no_grad():
                     with autocast(enabled=True):
@@ -469,11 +205,6 @@ class AutoEncoder:
     def get_optimizers_and_lr_schedules(self, discriminator):
         optimizer_g = torch.optim.Adam(params=self.autoencoder.parameters(), lr=self.config['ae_learning_rate'])
         optimizer_d = torch.optim.Adam(params=discriminator.parameters(), lr=self.config['d_learning_rate'])
-
-        # optimizer_g = torch.optim.SGD(self.autoencoder.parameters(), self.config['ae_learning_rate'],
-        #                               weight_decay=self.config['weight_decay'], momentum=0.99, nesterov=True)
-        # optimizer_d = torch.optim.SGD(discriminator.parameters(), self.config['d_learning_rate'],
-        #                               weight_decay=self.config['weight_decay'], momentum=0.99, nesterov=True)
 
         if self.config["lr_scheduler"]:
             scheduler_class = getattr(torch.optim.lr_scheduler, self.config["lr_scheduler"])  # Get the class dynamically
@@ -602,8 +333,6 @@ class AutoEncoder:
 
         optimizer_g, optimizer_d, g_lr_scheduler, d_lr_scheduler = self.get_optimizers_and_lr_schedules(discriminator)
 
-        # self.adapt_kl_loss_weight(val_loader)
-
         if self.config['load_model_path']:
             start_epoch = self.load_model(self.config['load_model_path'], optimizer=optimizer_g, scheduler=g_lr_scheduler,
                                           discriminator=discriminator, disc_optimizer=optimizer_d, disc_scheduler=d_lr_scheduler,
@@ -640,133 +369,55 @@ class AutoEncoder:
         total_time = time.time() - total_start
         print(f"Total training time: {time.strftime('%H:%M:%S', time.gmtime(total_time))}")
 
-    # def train(self, train_loader, val_loader):
-    #     temp_dir = tempfile.mkdtemp()
-    #     print(f"Using temp directory: {temp_dir}")
-    #     os.environ["TMPDIR"] = temp_dir
-    #     tempfile.tempdir = temp_dir
-    #
-    #     # unpack .npz files to .npy
-    #     train_loader.dataset.unpack_dataset()
-    #
-    #     try:
-    #         self.train_main(train_loader=train_loader, val_loader=val_loader)
-    #     except KeyboardInterrupt:
-    #         print("\nTraining interrupted by user (KeyboardInterrupt).")
-    #     except Exception as e:
-    #         traceback.print_exc()
-    #     finally:
-    #         # Clean up no matter what
-    #         print("\nCleaning up dataset...")
-    #         not_clean = True
-    #         while not_clean:
-    #             try:
-    #                 shutil.rmtree(temp_dir)
-    #                 print(f"Temp directory {temp_dir} removed.")
-    #                 train_loader.dataset.pack_dataset()
-    #                 not_clean = False
-    #             except BaseException:
-    #                 continue
 
+def get_config_for_current_task(dataset_id, model_type, gen_mode, progress_bar, continue_training):
+    preprocessed_dataset_path = glob.glob(os.getenv('dosegen_preprocessed') + f'/Task{dataset_id}*/')[0]
 
-def infer_loss_weights_and_fit_gpu(dataset_id, model_type, initial_config):
+    config_path = os.path.join(preprocessed_dataset_path, 'dosegen_config.yaml')
+    config = load_config(config_path)
 
-    test_config = get_config_for_current_task(dataset_id=dataset_id, model_type=model_type, progress_bar=False,
-                                              continue_training=False, initial_config=initial_config)
+    dataset_config_path = os.path.join(preprocessed_dataset_path, 'dataset.json')
+    with open(dataset_config_path, 'r') as f:
+        dataset_config = json.load(f)
 
-    train_loader, val_loader = get_data_loaders(test_config, dataset_id, splitting="train_val_test", model_type=model_type)
-
-    # initialize config
-    test_config['n_epochs'] = 1
-    test_config['autoencoder_warm_up_epochs'] = 0
-    test_config['grad_accumulate_step'] = 1
-    test_config['kl_weight'] = 1e-8
-    test_config['adv_weight'] = 1
-    test_config['perc_weight'] = 1
-
-    # unpack .npz files to .npy
-    train_loader.dataset.unpack_dataset()
-
-    not_done = True
-    while not_done:
-        try:
-            model = AutoEncoder(config=test_config, latent_space_type='vae')
-            model.train_main(train_loader=train_loader, val_loader=val_loader)
-
-            loss_dict = model.loss_dict
-            print(loss_dict)
-
-            # modify perceptual loss weight
-            perc_loss_weight_not_defined = True
-            while perc_loss_weight_not_defined:
-                rec_perc_difference = loss_dict['rec_loss'] / (loss_dict['perc_loss'] * test_config['perc_weight'])
-                if rec_perc_difference >= 0.5:
-                    test_config['perc_weight'] = test_config['perc_weight'] * 2
-                elif rec_perc_difference <= 0.25:
-                    test_config['perc_weight'] = test_config['perc_weight'] * 0.5
-                else:
-                    print(f"Perceptual loss weight set to: {test_config['perc_weight']}")
-                    perc_loss_weight_not_defined = False
-
-            # modify adversarial loss weight
-            perc_loss_weight_not_defined = True
-            while perc_loss_weight_not_defined:
-                rec_perc_difference = loss_dict['rec_loss'] / (loss_dict['gen_loss'] * test_config['adv_weight'])
-                if rec_perc_difference >= 0.5:
-                    test_config['adv_weight'] = test_config['adv_weight'] * 2
-                elif rec_perc_difference <= 0.25:
-                    test_config['adv_weight'] = test_config['adv_weight'] * 0.5
-                else:
-                    print(f"Adversarial loss weight set to: {test_config['adv_weight']}")
-                    perc_loss_weight_not_defined = False
-
-            train_loader.dataset.pack_dataset()
-            not_done = False
-        except RuntimeError as e:
-            if "out of memory" in str(e):
-                test_config['batch_size'] = test_config['batch_size'] // 2
-                print(f"CUDA out of memory error caught. Reducing batch_size to: {test_config['batch_size']}")
-                # Optionally clear cache to free memory
-                torch.cuda.empty_cache()
-            else:
-                # If it's some other error, re-raise it
-                raise e
-
-
-    # delete splits_file
-
-    # delete results_folder
-
-    # remove unnecessary key-values
-    keys_to_remove = ['progress_bar', 'output_mode', 'results_path', 'load_model_path']
-    test_config = {key: value for key, value in test_config.items() if key not in keys_to_remove}
-
-    return test_config
-
-
-def get_config_for_current_task(dataset_id, model_type, progress_bar, continue_training, initial_config=None):
-    # preprocessed_dataset_path = glob.glob(os.getenv('nnUNet_preprocessed') + f'/Dataset{dataset_id}*/')[0]
-    preprocessed_dataset_path = glob.glob(os.getenv('medimgen_preprocessed') + f'/Task{dataset_id}*/')[0]
-    if not initial_config:
-        config_path = os.path.join(preprocessed_dataset_path, 'medimgen_config.yaml')
-        if os.path.exists(config_path):
-            config = load_config(config_path)
-        else:
-            raise FileNotFoundError(
-                f"There is no medimgen configuration file for Dataset {dataset_id}. First run: medimgen_plan")
-    else:
-        config = initial_config
     config = config[model_type]
-    config['progress_bar'] = progress_bar
-    config['output_mode'] = 'verbose'
+
     dataset_folder_name = preprocessed_dataset_path.split('/')[-2]
-    results_path = os.path.join(os.getenv('medimgen_results'), dataset_folder_name, model_type, 'autoencoder')
+    results_path = os.path.join(os.getenv('dosegen_results'), dataset_folder_name, model_type, 'autoencoder')
     if os.path.exists(results_path) and not continue_training:
         raise FileExistsError(f"Results path {results_path} already exists.")
-    config['results_path'] = results_path
+
     last_model_path = os.path.join(results_path, 'checkpoints', 'last_model.pth')
+
+    in_channels = 0
+    if 'image' in gen_mode:
+        in_channels += dataset_config['n_img_channels']
+    if 'dose' in gen_mode:
+        in_channels += 1
+    if 'label' in gen_mode:
+        in_channels += dataset_config['n_classes'] + 1
+
+    config['vae_params']['in_channels'] = in_channels
+    config['vae_params']['out_channels'] = in_channels
+    config['discriminator_params']['in_channels'] = in_channels
+
+    config['data_path'] = os.path.join(preprocessed_dataset_path, 'data')
+    config['gen_mode'] = gen_mode
+    config['dataset_config'] = dataset_config
+    config['progress_bar'] = progress_bar
+    config['output_mode'] = 'verbose'
+    config['results_path'] = results_path
     config['load_model_path'] = last_model_path if continue_training else None
+
     return config
+
+
+def validate_strict_combo(value):
+    # Explicitly define allowed combinations
+    allowed = {'image', 'dose', 'label', 'image-dose', 'image-label', 'dose-label', 'image-dose-label'}
+    if value not in allowed:
+        raise argparse.ArgumentTypeError(f"Invalid value '{value}'. Must be one of: {sorted(allowed)}")
+    return value
 
 
 def parse_arguments():
@@ -774,22 +425,15 @@ def parse_arguments():
     parser.add_argument("dataset_id", type=str, help="Dataset ID")
     parser.add_argument("splitting", choices=["train-val-test", "5-fold"],
                         help="Choose either 'train-val-test' for a standard split or '5-fold' for cross-validation.")
-    parser.add_argument("model_type", choices=["2d", "3d"],
-                        help="Specify the model type: '2d' or '3d'.")
-    parser.add_argument("-f", "--fold", type=int, choices=[0, 1, 2, 3, 4, 5], required=False, default=None,
-                        help="Specify the fold index (0-5) when using 5-fold cross-validation.")
+    parser.add_argument("model_type", choices=["2d", "3d"], help="Specify the model type: '2d' or '3d'.")
+    parser.add_argument("gen_mode", type=validate_strict_combo, help="Str including items to generate, e.g., 'dose-label'.")
+    parser.add_argument("-f", "--fold", type=int, choices=[0, 1, 2, 3, 4], required=False, default=None,
+                        help="Specify the fold index (0-4) when using 5-fold cross-validation.")
     parser.add_argument("-l", "--latent_space_type", type=str, default="vae", choices=["vae", "vq"],
                         help="Type of latent space to use: 'vae' or 'vq'. Default is 'vae'.")
     parser.add_argument("-p", "--progress_bar", action="store_true", help="Enable progress bar (default: False)")
     parser.add_argument("-c", "--continue_training", action="store_true",
                         help="Continue training from the last checkpoint (default: False)")
-    parser.add_argument(
-        "-l", "--labels_for",
-        choices=["generation", "conditioning"],
-        default="conditioning",
-        help="Generate labels together with the doses or use them as condition to generate doses.",
-        required=False
-    )
 
     args = parser.parse_args()
 
@@ -812,17 +456,17 @@ def main():
     tempfile.tempdir = temp_dir
 
     try:
-
         args = parse_arguments()
         dataset_id = args.dataset_id
         splitting = args.splitting
         model_type = args.model_type
+        gen_mode = args.gen_mode
         fold = args.fold
         latent_space_type = args.latent_space_type
         progress_bar = args.progress_bar
         continue_training = args.continue_training
 
-        config = get_config_for_current_task(dataset_id, model_type, progress_bar, continue_training)
+        config = get_config_for_current_task(dataset_id, model_type, gen_mode, progress_bar, continue_training)
 
         transformations = config['ae_transformations']
         batch_size = config['ae_batch_size']
