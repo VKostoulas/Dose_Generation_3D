@@ -1,4 +1,7 @@
 import warnings
+
+import numpy as np
+
 warnings.filterwarnings("ignore")
 
 import matplotlib
@@ -24,7 +27,7 @@ from torch.nn import L1Loss
 from torchinfo import summary
 from torch.cuda.amp import GradScaler, autocast
 from monai.networks.nets import AutoencoderKL, VQVAE, PatchDiscriminator
-from monai.losses import PatchAdversarialLoss, PerceptualLoss
+from monai.losses import PatchAdversarialLoss, PerceptualLoss, GeneralizedDiceFocalLoss
 
 from dosegen.data_processing import get_data_loaders
 from dosegen.utils import load_config, create_2d_image_reconstruction_plot, create_gif_from_images, save_all_losses
@@ -37,6 +40,7 @@ class AutoEncoder:
 
         self.l1_loss = L1Loss()
         self.adv_loss = PatchAdversarialLoss(criterion="least_squares")
+        self.seg_loss = GeneralizedDiceFocalLoss(softmax=True)
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -61,6 +65,9 @@ class AutoEncoder:
         else:
             self.loss_dict = {'rec_loss': [], 'reg_loss': [], 'gen_loss': [], 'disc_loss': [], 'perc_loss': [],
                               'val_rec_loss': []}
+            if 'label' in self.config['gen_mode']:
+                self.loss_dict['seg_loss'] = []
+                self.loss_dict['val_seg_loss'] = []
 
     @staticmethod
     def get_kl_loss(z_mu, z_sigma):
@@ -73,8 +80,11 @@ class AutoEncoder:
     def train_one_epoch(self, epoch, train_loader, discriminator, perceptual_loss, optimizer_g, optimizer_d, scaler_g, scaler_d):
         self.autoencoder.train()
         discriminator.train()
-        epoch_loss_dict = {'rec_loss': 0, 'reg_loss': 0, 'gen_loss': 0, 'disc_loss': 0, 'perc_loss': 0}
         disable_prog_bar = self.config['output_mode'] == 'log' or not self.config['progress_bar']
+        epoch_loss_dict = {'rec_loss': 0, 'reg_loss': 0, 'gen_loss': 0, 'disc_loss': 0, 'perc_loss': 0}
+        if 'label' in self.config['gen_mode']:
+            epoch_loss_dict['seg_loss'] = 0
+
         start = time.time()
 
         with tqdm(enumerate(train_loader), total=len(train_loader), ncols=150, disable=disable_prog_bar, file=sys.stdout) as progress_bar:
@@ -150,9 +160,22 @@ class AutoEncoder:
                 reconstructions, z_mu, z_sigma = self.autoencoder(images)
                 step_loss_dict['reg_loss'] = self.get_kl_loss(z_mu, z_sigma) * self.config['kl_weight']
 
-            step_loss_dict['rec_loss'] = self.l1_loss(reconstructions.float(), images.float())
             step_loss_dict['perc_loss'] = perceptual_loss(reconstructions.float(), images.float()) * self.config['perc_weight']
-            loss_g = step_loss_dict['rec_loss'] + step_loss_dict['perc_loss'] + step_loss_dict['reg_loss']
+
+            if not 'label' in self.config['gen_mode']:
+                step_loss_dict['rec_loss'] = self.l1_loss(reconstructions.float(), images.float())
+                loss_g = step_loss_dict['rec_loss'] + step_loss_dict['perc_loss'] + step_loss_dict['reg_loss']
+            else:
+                n_label_channels = self.config['dataset_config']['n_classes'] + 1
+                not_seg_images = images[:, :-n_label_channels]
+                seg_images = images[:, -n_label_channels:]
+                not_seg_recons = reconstructions[:, :-n_label_channels]
+                seg_recons = reconstructions[:, -n_label_channels:]
+
+                step_loss_dict['rec_loss'] = self.l1_loss(not_seg_recons.float(), not_seg_images.float())
+                step_loss_dict['seg_loss'] = self.seg_loss(seg_recons.float(), seg_images.float())
+
+                loss_g = step_loss_dict['rec_loss'] + step_loss_dict['seg_loss'] + step_loss_dict['perc_loss'] + step_loss_dict['reg_loss']
 
             if epoch >= self.config['autoencoder_warm_up_epochs']:
                 logits_fake = discriminator(reconstructions.contiguous().float())[-1]
@@ -174,8 +197,12 @@ class AutoEncoder:
 
     def validate_one_epoch(self, val_loader, return_img_recon=False):
         self.autoencoder.eval()
-        val_epoch_loss = 0
         disable_prog_bar = self.config['output_mode'] == 'log' or not self.config['progress_bar']
+
+        val_epoch_loss_dict = {'val_rec_loss': 0}
+        if 'label' in self.config['gen_mode']:
+            val_epoch_loss_dict['val_seg_loss'] = 0
+
         start = time.time()
 
         with tqdm(enumerate(val_loader), total=len(val_loader), ncols=100, disable=disable_prog_bar, file=sys.stdout) as val_progress_bar:
@@ -185,23 +212,39 @@ class AutoEncoder:
                 with torch.no_grad():
                     with autocast(enabled=True):
                         reconstructions, *_ = self.autoencoder(images)
-                        recons_loss = self.l1_loss(reconstructions.float(), images.float())
 
-                val_epoch_loss += recons_loss.item()
-                val_progress_bar.set_postfix({"val_loss": val_epoch_loss / (step + 1)})
+                        if 'label' not in self.config['gen_mode']:
+                            recons_loss = self.l1_loss(reconstructions.float(), images.float())
+                        else:
+                            n_label_channels = self.config['dataset_config']['n_classes'] + 1
+                            not_seg_images = images[:, :-n_label_channels]
+                            seg_images = images[:, -n_label_channels:]
+                            not_seg_recons = reconstructions[:, :-n_label_channels]
+                            seg_recons = reconstructions[:, -n_label_channels:]
+
+                            recons_loss = self.l1_loss(not_seg_recons.float(), not_seg_images.float())
+                            seg_loss = self.seg_loss(seg_recons.float(), seg_images.float())
+
+                val_epoch_loss_dict['val_rec_loss'] += recons_loss.item()
+                if 'label' not in self.config['gen_mode']:
+                    val_epoch_loss_dict['val_seg_loss'] += seg_loss.item()
+
+                val_progress_bar.set_postfix({key: value / (step + 1) for key, value in val_epoch_loss_dict.items()})
+
+        val_epoch_loss_dict = {key: value / len(val_loader) for key, value in val_epoch_loss_dict.items()}
 
         if disable_prog_bar:
             end = time.time() - start
-            print(f"Time: {time.strftime('%H:%M:%S', time.gmtime(end))} - "
-                  f"Validation Loss: {val_epoch_loss / len(val_loader):.4f}")
+            print_string = f"Inference Time: {time.strftime('%H:%M:%S', time.gmtime(end))}"
+            for key in val_epoch_loss_dict:
+                print_string +=  f" - {key}: {val_epoch_loss_dict[key]:.4f}"
+            print(print_string)
 
-        self.loss_dict['val_rec_loss'].append(val_epoch_loss / len(val_loader))
+        for key in val_epoch_loss_dict:
+            self.loss_dict[key].append(val_epoch_loss_dict[key])
 
         if return_img_recon:
-            image = images[0].unsqueeze(0) if len(images[0].shape) < 5 else images[0]
-            reconstruction = reconstructions[0].unsqueeze(0) if len(reconstructions[0].shape) < 5 else \
-                reconstructions[0]
-            return image, reconstruction
+            return images, reconstructions
 
     def get_optimizers_and_lr_schedules(self, discriminator):
         optimizer_g = torch.optim.Adam(params=self.autoencoder.parameters(), lr=self.config['ae_learning_rate'])
@@ -413,7 +456,8 @@ class AutoEncoder:
             self.train_one_epoch(epoch, train_loader, discriminator, perceptual_loss, optimizer_g, optimizer_d, scaler_g, scaler_d)
             image, reconstruction = self.validate_one_epoch(val_loader, return_img_recon=True)
             save_all_losses(self.loss_dict, plot_save_path)
-            self.save_model(epoch, self.loss_dict['val_rec_loss'][-1], optimizer_g, discriminator, optimizer_d,
+            save_loss_value = np.mean([l[-1] for l in self.loss_dict.values()])
+            self.save_model(epoch, save_loss_value, optimizer_g, discriminator, optimizer_d,
                             scheduler=g_lr_scheduler, disc_scheduler=d_lr_scheduler)
 
             loss_pickle_path = os.path.join("/".join(plot_save_path.split('/')[:-1]), 'loss_dict.pkl')

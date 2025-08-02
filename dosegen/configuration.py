@@ -118,9 +118,9 @@ def create_vae_dict(max_image_size, spatial_dims):
                 'with_encoder_nonlocal_attn': False,
                 'with_decoder_nonlocal_attn': False,
                 'use_flash_attention': False,
-                'use_checkpointing': False,
+                'use_checkpoint': False,
                 'use_convtranspose': False,
-                'num_channels': base_autoencoder_channels[:vae_n_layers + 1],
+                'channels': base_autoencoder_channels[:vae_n_layers + 1],
                 'attention_levels': [False] * (vae_n_layers + 1),
                 'norm_num_groups': 16}
 
@@ -190,9 +190,9 @@ def create_config_dict(dataset_config, vae_dict, vqvae_dict, ddpm_dict, spatial_
     if spatial_dims == 2:
         perceptual_params = {'spatial_dims': 2, 'network_type': "vgg"}
     else:
-        perceptual_params = {'spatial_dims': 3, 'network_type': "vgg", 'is_fake_3d': True, 'fake_3d_ratio': 0.2}
+        perceptual_params = {'spatial_dims': 3, 'network_type': "radimagenet_resnet50", 'is_fake_3d': True, 'fake_3d_ratio': 0.2}
 
-    discriminator_params = {'spatial_dims': spatial_dims, 'out_channels': 1, 'num_channels': 64, 'num_layers_d': 3}
+    discriminator_params = {'spatial_dims': spatial_dims, 'out_channels': 1, 'channels': 64, 'num_layers_d': 3}
 
     # adjust parameters based on the training model (2d/3d) and number of training data
     n_epochs = 300 if spatial_dims == 3 else 200
@@ -217,8 +217,8 @@ def create_config_dict(dataset_config, vae_dict, vqvae_dict, ddpm_dict, spatial_
         'lr_scheduler_params': {'total_iters': n_epochs, 'power': 0.9},
         'time_scheduler_params': {'num_train_timesteps': 1000, 'schedule': "scaled_linear_beta", 'beta_start': 0.0015,
                                   'beta_end': 0.0205, 'prediction_type': "epsilon"},
-        'ae_learning_rate': 1e-4,
-        'd_learning_rate': 1e-4,
+        'ae_learning_rate': 5e-5,
+        'd_learning_rate': 5e-5,
         'autoencoder_warm_up_epochs': 5,
         'vae_params': vae_dict,
         'vqvae_params': vqvae_dict,
@@ -226,8 +226,8 @@ def create_config_dict(dataset_config, vae_dict, vqvae_dict, ddpm_dict, spatial_
         'discriminator_params': discriminator_params,
         'ddpm_learning_rate': 5e-5,
         'ddpm_params': ddpm_dict,
-        'adv_weight': 0.01,
-        'perc_weight': 0.5 if spatial_dims == 2 else 0.125,
+        'adv_weight': 0.005,
+        'perc_weight': 0.05 if spatial_dims == 2 else 0.125,
         'kl_weight': 1e-6 if spatial_dims == 2 else 1e-7,
         'q_weight': 1
     }
