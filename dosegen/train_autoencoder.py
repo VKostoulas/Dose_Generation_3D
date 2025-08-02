@@ -40,7 +40,7 @@ class AutoEncoder:
 
         self.l1_loss = L1Loss()
         self.adv_loss = PatchAdversarialLoss(criterion="least_squares")
-        self.seg_loss = GeneralizedDiceFocalLoss(softmax=True)
+        self.seg_loss = GeneralizedDiceFocalLoss()
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
