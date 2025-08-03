@@ -267,24 +267,27 @@ class AutoEncoder:
         is_3d = image.ndim == 5  # (B, C, D, H, W) or (B, C, H, W)
         B, C = image.shape[:2]
 
-        label_mode = 'label' in self.config['gen_mode']
+        label_mode = 'label' in self.config.get('gen_mode', '')
+        n_label_channels = self.config['dataset_config']['n_classes'] + 1 if label_mode else 0
+        C_data = C - n_label_channels
+
+        # Split image & recon into data and labels
+        image_data = image[:, :C_data]
+        recon_data = reconstruction[:, :C_data]
+
         if label_mode:
-            n_label_channels = self.config['dataset_config']['n_classes'] + 1
             image_labels = image[:, -n_label_channels:]
             recon_labels = reconstruction[:, -n_label_channels:]
-            image = image[:, :-n_label_channels]
-            reconstruction = reconstruction[:, :-n_label_channels]
-
-            # Convert one-hot to mask
             image_masks = torch.argmax(image_labels, dim=1)  # (B, D, H, W) or (B, H, W)
             recon_masks = torch.argmax(recon_labels, dim=1)
 
         if is_3d:
             for idx in range(min(2, B)):
-                for ch in range(C):
+                # Plot non-label channels individually as GIFs
+                for ch in range(C_data):
                     gif_images = []
-                    img_vol = image[idx, ch]
-                    recon_vol = reconstruction[idx, ch]
+                    img_vol = image_data[idx, ch]
+                    recon_vol = recon_data[idx, ch]
                     D = img_vol.shape[0]
 
                     for slice_idx in range(D):
@@ -310,18 +313,22 @@ class AutoEncoder:
                     gif_path = os.path.join(save_path, f"sample{idx}_channel{ch}.gif")
                     create_gif_from_images(gif_images, gif_path)
 
+                # Plot combined label mask
                 if label_mode:
                     gif_images_label = []
                     img_mask_vol = image_masks[idx]
                     recon_mask_vol = recon_masks[idx]
                     D = img_mask_vol.shape[0]
+
                     for slice_idx in range(D):
                         fig, axs = plt.subplots(1, 2, figsize=(4, 2))
-                        axs[0].imshow(img_mask_vol[slice_idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                        axs[0].imshow(img_mask_vol[slice_idx].cpu(), vmin=0,
+                                      vmax=self.config['dataset_config']['n_classes'], cmap='hot')
                         axs[0].set_title("Image Label")
                         axs[0].axis("off")
 
-                        axs[1].imshow(recon_mask_vol[slice_idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                        axs[1].imshow(recon_mask_vol[slice_idx].cpu(), vmin=0,
+                                      vmax=self.config['dataset_config']['n_classes'], cmap='hot')
                         axs[1].set_title("Recon Label")
                         axs[1].axis("off")
 
@@ -341,27 +348,31 @@ class AutoEncoder:
         else:
             indices = random.sample(range(B), min(4, B))
             for idx in indices:
-                fig, axs = plt.subplots(C, 2, figsize=(5, 2 * C))
-                for ch in range(C):
-                    axs[ch, 0].imshow(image[idx, ch].cpu(), cmap='gray', vmin=0, vmax=1)
-                    axs[ch, 0].set_title(f"Image Ch {ch}")
-                    axs[ch, 0].axis("off")
+                # Plot each non-label channel
+                for ch in range(C_data):
+                    fig, axs = plt.subplots(1, 2, figsize=(5, 2.5))
+                    axs[0].imshow(image_data[idx, ch].cpu(), cmap='gray', vmin=0, vmax=1)
+                    axs[0].set_title(f"Image Ch {ch}")
+                    axs[0].axis("off")
 
-                    axs[ch, 1].imshow(reconstruction[idx, ch].cpu(), cmap='gray', vmin=0, vmax=1)
-                    axs[ch, 1].set_title(f"Recon Ch {ch}")
-                    axs[ch, 1].axis("off")
+                    axs[1].imshow(recon_data[idx, ch].cpu(), cmap='gray', vmin=0, vmax=1)
+                    axs[1].set_title(f"Recon Ch {ch}")
+                    axs[1].axis("off")
 
-                fig.tight_layout()
-                plt.savefig(os.path.join(save_path, f"sample{idx}.png"), dpi=300)
-                plt.close(fig)
+                    fig.tight_layout()
+                    plt.savefig(os.path.join(save_path, f"sample{idx}_channel{ch}.png"), dpi=300)
+                    plt.close(fig)
 
+                # Plot combined label mask
                 if label_mode:
-                    fig, axs = plt.subplots(1, 2, figsize=(5, 2))
-                    axs[0].imshow(image_masks[idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                    fig, axs = plt.subplots(1, 2, figsize=(5, 2.5))
+                    axs[0].imshow(image_masks[idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'],
+                                  cmap='hot')
                     axs[0].set_title("Image Label")
                     axs[0].axis("off")
 
-                    axs[1].imshow(recon_masks[idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                    axs[1].imshow(recon_masks[idx].cpu(), vmin=0, vmax=self.config['dataset_config']['n_classes'],
+                                  cmap='hot')
                     axs[1].set_title("Recon Label")
                     axs[1].axis("off")
 
