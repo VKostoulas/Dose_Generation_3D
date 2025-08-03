@@ -40,7 +40,7 @@ class AutoEncoder:
 
         self.l1_loss = L1Loss()
         self.adv_loss = PatchAdversarialLoss(criterion="least_squares")
-        self.seg_loss = GeneralizedDiceFocalLoss()
+        self.seg_loss = GeneralizedDiceFocalLoss(softmax=True)
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -200,7 +200,7 @@ class AutoEncoder:
         disable_prog_bar = self.config['output_mode'] == 'log' or not self.config['progress_bar']
 
         val_epoch_loss_dict = {'val_rec_loss': 0}
-        if not 'label' in self.config['gen_mode']:
+        if 'label' in self.config['gen_mode']:
             val_epoch_loss_dict['val_seg_loss'] = 0
 
         start = time.time()
@@ -226,7 +226,7 @@ class AutoEncoder:
                             seg_loss = self.seg_loss(seg_recons.float(), seg_images.float())
 
                 val_epoch_loss_dict['val_rec_loss'] += recons_loss.item()
-                if not 'label' in self.config['gen_mode']:
+                if 'label' in self.config['gen_mode']:
                     val_epoch_loss_dict['val_seg_loss'] += seg_loss.item()
 
                 val_progress_bar.set_postfix({key: value / (step + 1) for key, value in val_epoch_loss_dict.items()})
