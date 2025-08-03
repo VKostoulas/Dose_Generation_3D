@@ -123,6 +123,10 @@ def save_all_losses(loss_dict, save_path, log_scale=True):
                           'reg_loss': 'Regularization Loss', 'gen_loss': 'Generator Loss',
                           'disc_loss': 'Discriminator Loss', 'perc_loss': 'Perceptual Loss'}
 
+    if any(['seg' in key for key in loss_dict]):
+        mapping_names_dict['seg_loss'] = 'Train Segmentation Loss'
+        mapping_names_dict['val_seg_loss'] = 'Val Segmentation Loss'
+
     plt.figure(figsize=(10, 8))
 
     for key in mapping_names_dict:

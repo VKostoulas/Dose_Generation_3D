@@ -27,7 +27,7 @@ from torch.nn import L1Loss
 from torchinfo import summary
 from torch.cuda.amp import GradScaler, autocast
 from monai.networks.nets import AutoencoderKL, VQVAE, PatchDiscriminator
-from monai.losses import PatchAdversarialLoss, PerceptualLoss, GeneralizedDiceFocalLoss
+from monai.losses import PatchAdversarialLoss, PerceptualLoss, DiceCELoss
 
 from dosegen.data_processing import get_data_loaders
 from dosegen.utils import load_config, create_2d_image_reconstruction_plot, create_gif_from_images, save_all_losses
@@ -40,7 +40,7 @@ class AutoEncoder:
 
         self.l1_loss = L1Loss()
         self.adv_loss = PatchAdversarialLoss(criterion="least_squares")
-        self.seg_loss = GeneralizedDiceFocalLoss(softmax=True)
+        self.seg_loss = DiceCELoss(softmax=True)
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -173,7 +173,7 @@ class AutoEncoder:
                 seg_recons = reconstructions[:, -n_label_channels:]
 
                 step_loss_dict['rec_loss'] = self.l1_loss(not_seg_recons.float(), not_seg_images.float())
-                step_loss_dict['seg_loss'] = self.seg_loss(seg_recons.float(), seg_images.float())
+                step_loss_dict['seg_loss'] = self.seg_loss(seg_recons.float(), seg_images.float()) * self.config['seg_weight']
 
                 loss_g = step_loss_dict['rec_loss'] + step_loss_dict['seg_loss'] + step_loss_dict['perc_loss'] + step_loss_dict['reg_loss']
 
