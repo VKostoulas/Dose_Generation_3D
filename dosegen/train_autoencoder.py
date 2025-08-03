@@ -163,7 +163,7 @@ class AutoEncoder:
             step_loss_dict['perc_loss'] = perceptual_loss(reconstructions.float(), images.float()) * self.config['perc_weight']
 
             if not 'label' in self.config['gen_mode']:
-                step_loss_dict['rec_loss'] = self.l1_loss(reconstructions.float(), images.float())
+                step_loss_dict['rec_loss'] = self.l1_loss(reconstructions.float(), images.float()) * self.config['rec_weight']
                 loss_g = step_loss_dict['rec_loss'] + step_loss_dict['perc_loss'] + step_loss_dict['reg_loss']
             else:
                 n_label_channels = self.config['dataset_config']['n_classes'] + 1
@@ -172,15 +172,14 @@ class AutoEncoder:
                 not_seg_recons = reconstructions[:, :-n_label_channels]
                 seg_recons = reconstructions[:, -n_label_channels:]
 
-                step_loss_dict['rec_loss'] = self.l1_loss(not_seg_recons.float(), not_seg_images.float())
+                step_loss_dict['rec_loss'] = self.l1_loss(not_seg_recons.float(), not_seg_images.float()) * self.config['rec_weight']
                 step_loss_dict['seg_loss'] = self.seg_loss(seg_recons.float(), seg_images.float()) * self.config['seg_weight']
 
                 loss_g = step_loss_dict['rec_loss'] + step_loss_dict['seg_loss'] + step_loss_dict['perc_loss'] + step_loss_dict['reg_loss']
 
             if epoch >= self.config['autoencoder_warm_up_epochs']:
                 logits_fake = discriminator(reconstructions.contiguous().float())[-1]
-                step_loss_dict['gen_loss'] = self.adv_loss(logits_fake, target_is_real=True, for_discriminator=False) * \
-                                             self.config['adv_weight']
+                step_loss_dict['gen_loss'] = self.adv_loss(logits_fake, target_is_real=True, for_discriminator=False) * self.config['adv_weight']
                 loss_g += step_loss_dict['gen_loss']
 
         scaler_g.scale(loss_g).backward()
@@ -214,7 +213,7 @@ class AutoEncoder:
                         reconstructions, *_ = self.autoencoder(images)
 
                         if not 'label' in self.config['gen_mode']:
-                            recons_loss = self.l1_loss(reconstructions.float(), images.float())
+                            recons_loss = self.l1_loss(reconstructions.float(), images.float()) * self.config['rec_weight']
                         else:
                             n_label_channels = self.config['dataset_config']['n_classes'] + 1
                             not_seg_images = images[:, :-n_label_channels]
@@ -222,8 +221,8 @@ class AutoEncoder:
                             not_seg_recons = reconstructions[:, :-n_label_channels]
                             seg_recons = reconstructions[:, -n_label_channels:]
 
-                            recons_loss = self.l1_loss(not_seg_recons.float(), not_seg_images.float())
-                            seg_loss = self.seg_loss(seg_recons.float(), seg_images.float())
+                            recons_loss = self.l1_loss(not_seg_recons.float(), not_seg_images.float()) * self.config['rec_weight']
+                            seg_loss = self.seg_loss(seg_recons.float(), seg_images.float()) * self.config['seg_weight']
 
                 val_epoch_loss_dict['val_rec_loss'] += recons_loss.item()
                 if 'label' in self.config['gen_mode']:

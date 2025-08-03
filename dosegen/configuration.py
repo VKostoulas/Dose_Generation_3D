@@ -226,10 +226,11 @@ def create_config_dict(dataset_config, vae_dict, vqvae_dict, ddpm_dict, spatial_
         'discriminator_params': discriminator_params,
         'ddpm_learning_rate': 5e-5,
         'ddpm_params': ddpm_dict,
-        'adv_weight': 0.005,
-        'perc_weight': 0.05 if spatial_dims == 2 else 0.125,
-        'kl_weight': 1e-6 if spatial_dims == 2 else 1e-7,
+        'adv_weight': 0.01,
+        'perc_weight': 0.05,
+        'kl_weight': 1e-7 if spatial_dims == 2 else 1e-8,
         'q_weight': 1,
+        'rec_weight': 10,
         'seg_weight': 1
     }
     return config
