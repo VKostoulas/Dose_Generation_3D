@@ -198,9 +198,9 @@ def create_config_dict(dataset_config, vae_dict, vqvae_dict, ddpm_dict, spatial_
     n_epochs = 300 if spatial_dims == 3 else 200
     n_epochs = n_epochs * 2 if dataset_config['n_patients'] > 300 else n_epochs
 
-    ae_batch_size = 24 if spatial_dims == 2 else 2
-    ddpm_batch_size = 24 if ddpm_dict['spatial_dims'] == 2 else 4
-    grad_accumulate_step = 1
+    ae_batch_size = 24 if spatial_dims == 2 else 1
+    ddpm_batch_size = 24 if ddpm_dict['spatial_dims'] == 2 else 2
+    grad_accumulate_step = 1 if ddpm_dict['spatial_dims'] == 2 else 2
 
     config = {
         'ae_transformations': ae_transformations,
