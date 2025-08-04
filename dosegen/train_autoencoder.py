@@ -125,10 +125,18 @@ class AutoEncoder:
             for param in self.autoencoder.parameters():
                 param.requires_grad = False
 
+            if 'label' in self.config['gen_mode']:
+                n_label_channels = self.config['dataset_config']['n_classes'] + 1
+                disc_images = images[:, :-n_label_channels]
+                disc_recons = reconstructions[:, :-n_label_channels]
+            else:
+                disc_images = images
+                disc_recons = reconstructions
+
             with autocast(enabled=True):
-                logits_fake = discriminator(reconstructions.contiguous().detach())[-1]
+                logits_fake = discriminator(disc_recons.contiguous().detach())[-1]
                 loss_d_fake = self.adv_loss(logits_fake, target_is_real=False, for_discriminator=True)
-                logits_real = discriminator(images.contiguous().detach())[-1]
+                logits_real = discriminator(disc_images.contiguous().detach())[-1]
                 loss_d_real = self.adv_loss(logits_real, target_is_real=True, for_discriminator=True)
                 discriminator_loss = (loss_d_fake + loss_d_real) * 0.5
                 step_loss_dict['disc_loss'] = discriminator_loss * self.config['adv_weight']
@@ -160,11 +168,15 @@ class AutoEncoder:
                 reconstructions, z_mu, z_sigma = self.autoencoder(images)
                 step_loss_dict['reg_loss'] = self.get_kl_loss(z_mu, z_sigma) * self.config['kl_weight']
 
-            step_loss_dict['perc_loss'] = perceptual_loss(reconstructions.float(), images.float()) * self.config['perc_weight']
-
             if not 'label' in self.config['gen_mode']:
                 step_loss_dict['rec_loss'] = self.l1_loss(reconstructions.float(), images.float()) * self.config['rec_weight']
+                step_loss_dict['perc_loss'] = perceptual_loss(reconstructions.float(), images.float()) * self.config['perc_weight']
                 loss_g = step_loss_dict['rec_loss'] + step_loss_dict['perc_loss'] + step_loss_dict['reg_loss']
+
+                if epoch >= self.config['autoencoder_warm_up_epochs']:
+                    logits_fake = discriminator(reconstructions.contiguous().float())[-1]
+                    step_loss_dict['gen_loss'] = self.adv_loss(logits_fake, target_is_real=True, for_discriminator=False) * self.config['adv_weight']
+                    loss_g += step_loss_dict['gen_loss']
             else:
                 n_label_channels = self.config['dataset_config']['n_classes'] + 1
                 not_seg_images = images[:, :-n_label_channels]
@@ -174,13 +186,13 @@ class AutoEncoder:
 
                 step_loss_dict['rec_loss'] = self.l1_loss(not_seg_recons.float(), not_seg_images.float()) * self.config['rec_weight']
                 step_loss_dict['seg_loss'] = self.seg_loss(seg_recons.float(), seg_images.float()) * self.config['seg_weight']
-
+                step_loss_dict['perc_loss'] = perceptual_loss(not_seg_recons.float(), not_seg_images.float()) * self.config['perc_weight']
                 loss_g = step_loss_dict['rec_loss'] + step_loss_dict['seg_loss'] + step_loss_dict['perc_loss'] + step_loss_dict['reg_loss']
 
-            if epoch >= self.config['autoencoder_warm_up_epochs']:
-                logits_fake = discriminator(reconstructions.contiguous().float())[-1]
-                step_loss_dict['gen_loss'] = self.adv_loss(logits_fake, target_is_real=True, for_discriminator=False) * self.config['adv_weight']
-                loss_g += step_loss_dict['gen_loss']
+                if epoch >= self.config['autoencoder_warm_up_epochs']:
+                    logits_fake = discriminator(not_seg_recons.contiguous().float())[-1]
+                    step_loss_dict['gen_loss'] = self.adv_loss(logits_fake, target_is_real=True, for_discriminator=False) * self.config['adv_weight']
+                    loss_g += step_loss_dict['gen_loss']
 
         scaler_g.scale(loss_g).backward()
         if (step + 1) % self.config['grad_accumulate_step'] == 0 or (step + 1) == len(train_loader):
@@ -444,7 +456,8 @@ class AutoEncoder:
         plot_save_path = os.path.join(self.config['results_path'], 'plots')
 
         img_shape = self.config['ae_transformations']['patch_size']
-        input_shape = (self.config['ae_batch_size'], self.autoencoder.encoder.in_channels, *img_shape)
+        ae_input_shape = (self.config['ae_batch_size'], self.autoencoder.encoder.in_channels, *img_shape)
+        rest_input_shape = (self.config['ae_batch_size'], self.config['discriminator_params']['in_channels'], *img_shape)
 
         discriminator = PatchDiscriminator(**self.config['discriminator_params']).to(self.device)
         perceptual_loss = PerceptualLoss(**self.config['perceptual_params']).to(self.device)
@@ -458,9 +471,9 @@ class AutoEncoder:
 
         if self.print_summary:
             print("\nStarting training autoencoder model...")
-            summary(self.autoencoder, input_shape, batch_dim=None, depth=3)
-            summary(discriminator, input_shape, batch_dim=None, depth=3)
-            summary(perceptual_loss, [input_shape, input_shape], batch_dim=None, depth=3)
+            summary(self.autoencoder, ae_input_shape, batch_dim=None, depth=3)
+            summary(discriminator, rest_input_shape, batch_dim=None, depth=3)
+            summary(perceptual_loss, [rest_input_shape, rest_input_shape], batch_dim=None, depth=3)
 
         for epoch in range(start_epoch, self.config['n_epochs'] + 1):
             self.train_one_epoch(epoch, train_loader, discriminator, perceptual_loss, optimizer_g, optimizer_d, scaler_g, scaler_d)
@@ -508,17 +521,17 @@ def get_config_for_current_task(dataset_id, model_type, gen_mode, progress_bar, 
 
     last_model_path = os.path.join(results_path, 'checkpoints', 'last_model.pth')
 
-    in_channels = 0
+    img_channels = label_channels = 0
     if 'image' in gen_mode:
-        in_channels += dataset_config['n_img_channels']
+        img_channels += dataset_config['n_img_channels']
     if 'dose' in gen_mode:
-        in_channels += 1
+        img_channels += 1
     if 'label' in gen_mode:
-        in_channels += dataset_config['n_classes'] + 1
+        label_channels += dataset_config['n_classes'] + 1
 
-    config['vae_params']['in_channels'] = in_channels
-    config['vae_params']['out_channels'] = in_channels
-    config['discriminator_params']['in_channels'] = in_channels
+    config['vae_params']['in_channels'] = img_channels + label_channels
+    config['vae_params']['out_channels'] = img_channels + label_channels
+    config['discriminator_params']['in_channels'] = img_channels
 
     config['data_path'] = os.path.join(preprocessed_dataset_path, 'data')
     config['gen_mode'] = gen_mode

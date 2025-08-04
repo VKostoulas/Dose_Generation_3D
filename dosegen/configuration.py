@@ -231,7 +231,7 @@ def create_config_dict(dataset_config, vae_dict, vqvae_dict, ddpm_dict, spatial_
         'kl_weight': 1e-7 if spatial_dims == 2 else 1e-8,
         'q_weight': 1,
         'rec_weight': 10,
-        'seg_weight': 1
+        'seg_weight': 0.5
     }
     return config
 
