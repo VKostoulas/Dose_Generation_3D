@@ -103,6 +103,17 @@ class LDM:
 
     def get_inferer_and_latent_shape(self, train_loader):
         check_batch = next(iter(train_loader))['input']
+        if 'label' in self.config[self.model_type]['gen_mode']:
+            n_label_channels = self.config[self.model_type]['dataset_config']['n_classes'] + 1
+            labels = check_batch[:, -1]
+            labels = torch.nn.functional.one_hot(labels.long(), num_classes=n_label_channels)
+            if labels.ndim == 5:  # 3D
+                labels = labels.permute(0, 4, 1, 2, 3)
+            elif labels.ndim == 4:  # 2D
+                labels = labels.permute(0, 3, 1, 2)
+
+            check_batch = torch.cat((check_batch[:, :-1], labels), dim=1)
+
         encoding_func = self.autoencoder.encode if self.latent_space_type == 'vq' else self.autoencoder.encode_stage_2_inputs
 
         if self.from2d:
@@ -174,7 +185,7 @@ class LDM:
                     elif labels.ndim == 4:  # 2D
                         labels = labels.permute(0, 3, 1, 2)
 
-                    images = torch.cat((images, labels), dim=1)
+                    images = torch.cat((images[:, :-1], labels), dim=1)
                 timesteps = torch.randint(0, self.scheduler.num_train_timesteps, (images.shape[0],),
                                           device=images.device).long()
 
@@ -248,7 +259,7 @@ class LDM:
                     elif labels.ndim == 4:  # 2D
                         labels = labels.permute(0, 3, 1, 2)
 
-                    images = torch.cat((images, labels), dim=1)
+                    images = torch.cat((images[:, :-1], labels), dim=1)
                 timesteps = torch.randint(0, self.scheduler.num_train_timesteps, (images.shape[0],),
                                           device=images.device).long()
 
