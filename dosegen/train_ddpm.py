@@ -6,13 +6,13 @@ matplotlib.use('Agg')
 
 import os
 import sys
+import json
 import time
 import glob
-import traceback
 import pickle
 import tempfile
-import shutil
 import argparse
+import random
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -24,18 +24,16 @@ from tqdm import tqdm
 from io import BytesIO
 from PIL import Image
 from torchinfo import summary
-from monai.utils import set_determinism
 from generative.inferers import DiffusionInferer, LatentDiffusionInferer
 from generative.networks.schedulers import DDPMScheduler
 from generative.networks.nets import VQVAE
 from generative.losses.perceptual import medicalnet_intensity_normalisation
 from generative.metrics import FIDMetric, MMDMetric, SSIMMetric, MultiScaleSSIMMetric
 
-from medimgen.data_processing import get_data_loaders
-from medimgen.utils import load_config
-from medimgen.autoencoderkl_with_strides import AutoencoderKL
-from medimgen.diffusion_model_unet_with_strides import DiffusionModelUNet
-from medimgen.utils import create_gif_from_images, save_all_losses
+from dosegen.data_processing import get_data_loaders
+from dosegen.utils import load_config
+from monai.networks.nets import AutoencoderKL, VQVAE, DiffusionModelUNet
+from dosegen.utils import create_gif_from_images, save_all_losses, validate_strict_combo
 
 
 class LDM:
@@ -104,7 +102,7 @@ class LDM:
         return ((tensor + 1) / 2) * (self.codebook_max - self.codebook_min) + self.codebook_min
 
     def get_inferer_and_latent_shape(self, train_loader):
-        check_batch = next(iter(train_loader))['image']
+        check_batch = next(iter(train_loader))['input']
         encoding_func = self.autoencoder.encode if self.latent_space_type == 'vq' else self.autoencoder.encode_stage_2_inputs
 
         if self.from2d:
@@ -166,7 +164,17 @@ class LDM:
 
             optimizer.zero_grad(set_to_none=True)
             for step, batch in progress_bar:
-                images = batch["image"].to(self.device)
+                images = batch["input"].to(self.device)
+                if 'label' in self.config['gen_mode']:
+                    n_label_channels = self.config['dataset_config']['n_classes'] + 1
+                    labels = images[:, -1]
+                    labels = torch.nn.functional.one_hot(labels.long(), num_classes=n_label_channels)
+                    if labels.ndim == 5:  # 3D
+                        labels = labels.permute(0, 4, 1, 2, 3)
+                    elif labels.ndim == 4:  # 2D
+                        labels = labels.permute(0, 3, 1, 2)
+
+                    images = torch.cat((images, labels), dim=1)
                 timesteps = torch.randint(0, self.scheduler.num_train_timesteps, (images.shape[0],),
                                           device=images.device).long()
 
@@ -230,7 +238,17 @@ class LDM:
 
         with tqdm(enumerate(val_loader), total=len(val_loader), ncols=100, disable=disable_prog_bar, file=sys.stdout) as val_progress_bar:
             for step, batch in val_progress_bar:
-                images = batch["image"].to(self.device)
+                images = batch["input"].to(self.device)
+                if 'label' in self.config['gen_mode']:
+                    n_label_channels = self.config['dataset_config']['n_classes'] + 1
+                    labels = images[:, -1]
+                    labels = torch.nn.functional.one_hot(labels.long(), num_classes=n_label_channels)
+                    if labels.ndim == 5:  # 3D
+                        labels = labels.permute(0, 4, 1, 2, 3)
+                    elif labels.ndim == 4:  # 2D
+                        labels = labels.permute(0, 3, 1, 2)
+
+                    images = torch.cat((images, labels), dim=1)
                 timesteps = torch.randint(0, self.scheduler.num_train_timesteps, (images.shape[0],),
                                           device=images.device).long()
 
@@ -316,7 +334,7 @@ class LDM:
         val_iter = cycle(val_loader)
         while total_real_count < n_sampled_images:
             batch = next(val_iter)
-            real_images = batch["image"].to(self.device)
+            real_images = batch["input"].to(self.device)
             with torch.no_grad():
                 real_eval_feats = self.get_perceptual_features(real_images, spatial_dims, perceptual_net)
             real_features.append(real_eval_feats)
@@ -422,70 +440,100 @@ class LDM:
         return images
 
     def save_plots(self, sampled_images, plot_name):
-        save_path = os.path.join(self.config['results_path'], 'plots')
+        save_path = os.path.join(self.config['results_path'], 'plots', plot_name)
         os.makedirs(save_path, exist_ok=True)
 
-        is_3d = len(sampled_images.shape) == 5
+        is_3d = sampled_images.ndim == 5
+        B, C = sampled_images.shape[:2]
+
+        label_mode = 'label' in self.config.get('gen_mode', '')
+        n_label_channels = self.config['dataset_config']['n_classes'] + 1 if label_mode else 0
+        C_data = C - n_label_channels
+
+        # Split data and labels
+        sampled_data = sampled_images[:, :C_data]
+        if label_mode:
+            sampled_labels = sampled_images[:, -n_label_channels:]
+            sampled_masks = torch.argmax(sampled_labels, dim=1)  # (B, D, H, W) or (B, H, W)
 
         if is_3d:
-            # 3D case: assume shape (N, C, D, H, W)
-            plot_save_path = os.path.join(save_path, f'{plot_name}.gif')
-            num_volumes = min(sampled_images.shape[0], 2)
-            num_slices = sampled_images.shape[2]
-            gif_images = []
+            for idx in range(min(2, B)):
+                # Plot each non-label channel as GIF
+                for ch in range(C_data):
+                    gif_images = []
+                    vol = sampled_data[idx, ch]
+                    D = vol.shape[0]
 
-            # Loop over all slices in the depth dimension
-            for slice_idx in range(num_slices):
-                fig, axes = plt.subplots(1, num_volumes, figsize=(2 * num_volumes, 2))
-                if num_volumes == 1:
-                    axes = [axes]  # Ensure axes is iterable
+                    for slice_idx in range(D):
+                        fig, ax = plt.subplots(figsize=(2, 2))
+                        ax.imshow(vol[slice_idx].cpu(), cmap='gray', vmin=0, vmax=1)
+                        ax.set_title(f"Sample Ch {ch}")
+                        ax.axis("off")
 
-                # For each volume (up to 2), plot the corresponding slice
-                for vol_idx in range(num_volumes):
-                    # Extract the slice for the given volume (assumes single channel)
-                    slice_image = sampled_images.cpu()[vol_idx, 0, slice_idx, :, :]
-                    axes[vol_idx].imshow(slice_image, vmin=0, vmax=1, cmap="gray")
-                    axes[vol_idx].axis("off")
+                        buffer = BytesIO()
+                        plt.tight_layout()
+                        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight', pad_inches=0)
+                        plt.close(fig)
 
-                plt.tight_layout(pad=0)
-                buffer = BytesIO()
-                plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight', pad_inches=0)
-                plt.close()
-                buffer.seek(0)
-                gif_frame = Image.open(buffer).copy()
-                gif_images.append(gif_frame)
-                buffer.close()
+                        buffer.seek(0)
+                        gif_image = Image.open(buffer).copy()
+                        gif_images.append(gif_image)
+                        buffer.close()
 
-            create_gif_from_images(gif_images, plot_save_path)
+                    gif_path = os.path.join(save_path, f"sample{idx}_channel{ch}.gif")
+                    create_gif_from_images(gif_images, gif_path)
+
+                # Label masks as GIF
+                if label_mode:
+                    gif_images_label = []
+                    mask_vol = sampled_masks[idx]
+                    D = mask_vol.shape[0]
+
+                    for slice_idx in range(D):
+                        fig, ax = plt.subplots(figsize=(2, 2))
+                        ax.imshow(mask_vol[slice_idx].cpu(),
+                                  vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                        ax.set_title("Sample Label")
+                        ax.axis("off")
+
+                        buffer = BytesIO()
+                        plt.tight_layout()
+                        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight', pad_inches=0)
+                        plt.close(fig)
+
+                        buffer.seek(0)
+                        gif_image = Image.open(buffer).copy()
+                        gif_images_label.append(gif_image)
+                        buffer.close()
+
+                    gif_path = os.path.join(save_path, f"sample{idx}_labels.gif")
+                    create_gif_from_images(gif_images_label, gif_path)
 
         else:
-            # 2D case: assume shape (N, C, H, W)
-            num_images = min(sampled_images.shape[0], 16)
-            selected_images = sampled_images.cpu()[:num_images, 0, :, :]  # take the first channel
-            columns = min(4, num_images)
-            rows = (num_images + columns - 1) // columns
-
-            fig, axes = plt.subplots(rows, columns, figsize=(columns * 2, rows * 2))
-            # Ensure axes is a flat list for easy iteration
-            if isinstance(axes, np.ndarray):
-                axes = axes.flatten()
-            else:
-                axes = [axes]
-
-            # Loop through grid positions
-            for idx in range(rows * columns):
-                ax = axes[idx]
-                if idx < num_images:
-                    ax.imshow(selected_images[idx], vmin=0, vmax=1, cmap="gray")
+            indices = random.sample(range(B), min(4, B))
+            for idx in indices:
+                # Plot each non-label channel
+                for ch in range(C_data):
+                    fig, ax = plt.subplots(figsize=(2.5, 2.5))
+                    ax.imshow(sampled_data[idx, ch].cpu(), cmap='gray', vmin=0, vmax=1)
+                    ax.set_title(f"Sample Ch {ch}")
                     ax.axis("off")
-                else:
-                    ax.axis("off")  # Hide unused subplots
 
-            plt.tight_layout(pad=0)
-            plot_save_path = os.path.join(save_path, f'{plot_name}.png')
-            plt.savefig(plot_save_path, dpi=300, bbox_inches='tight', pad_inches=0)
-            plt.close()
-            print(f"Plot created successfully at {plot_save_path}")
+                    fig.tight_layout()
+                    plt.savefig(os.path.join(save_path, f"sample{idx}_channel{ch}.png"), dpi=300)
+                    plt.close(fig)
+
+                # Label mask
+                if label_mode:
+                    fig, ax = plt.subplots(figsize=(2.5, 2.5))
+                    ax.imshow(sampled_masks[idx].cpu(),
+                              vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                    ax.set_title("Sample Label")
+                    ax.axis("off")
+
+                    fig.tight_layout()
+                    plt.savefig(os.path.join(save_path, f"sample{idx}_labels.png"), dpi=300)
+                    plt.close(fig)
 
     def save_model(self, epoch, validation_loss, optimizer, scheduler=None):
         save_path = os.path.join(self.config['results_path'], 'checkpoints')
@@ -589,8 +637,8 @@ def parse_arguments():
     parser.add_argument("dataset_id", type=str, help="Dataset ID")
     parser.add_argument("splitting", choices=["train-val-test", "5-fold"],
                         help="Choose either 'train-val-test' for a standard split or '5-fold' for cross-validation.")
-    parser.add_argument("model_type", choices=["2d", "3d"],
-                        help="Specify the model type: '2d' or '3d'.")
+    parser.add_argument("model_type", choices=["2d", "3d"], help="Specify the model type: '2d' or '3d'.")
+    parser.add_argument("gen_mode", type=validate_strict_combo, help="Str including items to generate, e.g., 'dose-label'.")
     parser.add_argument("-f", "--fold", type=int, choices=[0, 1, 2, 3, 4, 5], required=False, default=None,
                         help="Specify the fold index (0-5) when using 5-fold cross-validation.")
     parser.add_argument("-l", "--latent_space_type", type=str, default="vae", choices=["vae", "vq"],
@@ -600,13 +648,6 @@ def parse_arguments():
                         help="Continue training from the last checkpoint (default: False)")
     parser.add_argument("--from2d", action="store_true",
                         help="Train a 3D LDM with combined slices from 2D Autoencoder")
-    parser.add_argument(
-        "-l", "--labels_for",
-        choices=["generation", "conditioning"],
-        default="conditioning",
-        help="Generate labels together with the doses or use them as condition to generate doses.",
-        required=False
-    )
 
     args = parser.parse_args()
 
@@ -624,63 +665,76 @@ def parse_arguments():
     return args
 
 
-def get_config_for_current_task(dataset_id, model_type, progress_bar, continue_training, from2d, initial_config=None):
-    # preprocessed_dataset_path = glob.glob(os.getenv('nnUNet_preprocessed') + f'/Dataset{dataset_id}*/')[0]
-    preprocessed_dataset_path = glob.glob(os.getenv('medimgen_preprocessed') + f'/Task{dataset_id}*/')[0]
-    if not initial_config:
-        config_path = os.path.join(preprocessed_dataset_path, 'medimgen_config.yaml')
-        if os.path.exists(config_path):
-            config = load_config(config_path)
-        else:
-            raise FileNotFoundError(
-                f"There is no medimgen configuration file for Dataset {dataset_id}. First run: medimgen_plan")
-    else:
-        config = initial_config
-    # config = config['2D'] if model_type == '2d' else config['3D']
-    config['progress_bar'] = progress_bar
-    config['output_mode'] = 'verbose'
-    dataset_folder_name = preprocessed_dataset_path.split('/')[-2]
+def get_config_for_current_task(dataset_id, model_type, gen_mode, progress_bar, continue_training, from2d):
+    preprocessed_dataset_path = glob.glob(os.getenv('dosegen_preprocessed') + f'/Task{dataset_id}*/')[0]
 
+    config_path = os.path.join(preprocessed_dataset_path, 'dosegen_config.yaml')
+    config = load_config(config_path)
+
+    dataset_config_path = os.path.join(preprocessed_dataset_path, 'dataset.json')
+    with open(dataset_config_path, 'r') as f:
+        dataset_config = json.load(f)
+
+    dataset_folder_name = preprocessed_dataset_path.split('/')[-2]
     main_results_folder = model_type if not from2d else 'hybrid'
-    main_results_path = os.path.join(os.getenv('medimgen_results'), dataset_folder_name, main_results_folder)
+    main_results_path = os.path.join(os.getenv('dosegen_results'), dataset_folder_name, main_results_folder)
+
     if from2d:
-        trained_ae_path = os.path.join(os.getenv('medimgen_results'), dataset_folder_name, '2d', 'autoencoder', 'checkpoints', 'best_model.pth')
+        trained_ae_path = os.path.join(os.getenv('dosegen_results'), dataset_folder_name, '2d', 'autoencoder', gen_mode, 'checkpoints', 'best_model.pth')
     else:
-        trained_ae_path = os.path.join(main_results_path, 'autoencoder', 'checkpoints', 'best_model.pth')
+        trained_ae_path = os.path.join(main_results_path, 'autoencoder', gen_mode, 'checkpoints', 'best_model.pth')
     if not os.path.isfile(trained_ae_path):
         raise FileNotFoundError(f"No pretrained autoencoder found. You should first train an autoencoder in order to "
                                 f"train a latent diffusion model")
-    config['load_autoencoder_path'] = trained_ae_path
 
     results_path = os.path.join(main_results_path, 'ldm')
     if os.path.exists(results_path) and not continue_training:
         raise FileExistsError(f"Results path {results_path} already exists.")
-    config['results_path'] = results_path
+
     last_model_path = os.path.join(results_path, 'checkpoints', 'last_model.pth')
+
+    img_channels = label_channels = 0
+    if 'image' in gen_mode:
+        img_channels += dataset_config['n_img_channels']
+    if 'dose' in gen_mode:
+        img_channels += 1
+    if 'label' in gen_mode:
+        label_channels += dataset_config['n_classes'] + 1
+
+    config['load_autoencoder_path'] = trained_ae_path
+
+    for m_type in ['2d', '3d']:
+        config[m_type]['vae_params']['in_channels'] = img_channels + label_channels
+        config[m_type]['vae_params']['out_channels'] = img_channels + label_channels
+        config[m_type]['discriminator_params']['in_channels'] = img_channels
+
+    config['data_path'] = os.path.join(preprocessed_dataset_path, 'data')
+    config['gen_mode'] = gen_mode
+    config['dataset_config'] = dataset_config
+    config['progress_bar'] = progress_bar
+    config['output_mode'] = 'verbose'
+    config['results_path'] = results_path
     config['load_model_path'] = last_model_path if continue_training else None
+
     return config
 
 
 def main():
-    # Set temp dir BEFORE any other imports or logic
-    temp_dir = tempfile.mkdtemp()  # Explicitly use local disk
-    print(f"Using temp directory: {temp_dir}")
-    os.environ["TMPDIR"] = temp_dir
-    tempfile.tempdir = temp_dir
-
-    try:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        print(f"Using temp directory: {temp_dir}")
 
         args = parse_arguments()
         dataset_id = args.dataset_id
         splitting = args.splitting
         model_type = args.model_type
+        gen_mode = args.gen_mode
         fold = args.fold
         latent_space_type = args.latent_space_type
         progress_bar = args.progress_bar
         continue_training = args.continue_training
         from2d = args.from2d
 
-        config = get_config_for_current_task(dataset_id, model_type, progress_bar, continue_training, from2d)
+        config = get_config_for_current_task(dataset_id, model_type, gen_mode, progress_bar, continue_training, from2d)
 
         transformations = config[model_type]['ddpm_transformations']
         batch_size = config[model_type]['ddpm_batch_size']
@@ -688,8 +742,3 @@ def main():
 
         model = LDM(config=config, model_type=model_type, latent_space_type=latent_space_type, from2d=from2d)
         model.train(train_loader=train_loader, val_loader=val_loader)
-
-    finally:
-
-        shutil.rmtree(temp_dir)
-        print(f"Temp directory {temp_dir} removed.")

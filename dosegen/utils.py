@@ -3,6 +3,7 @@ matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
 import os
+import argparse
 import yaml
 
 
@@ -10,6 +11,14 @@ def load_config(config_path):
     with open(config_path, "r") as file:
         config_file = yaml.safe_load(file)
         return config_file
+
+
+def validate_strict_combo(value):
+    # Explicitly define allowed combinations
+    allowed = {'image', 'dose', 'label', 'image-dose', 'image-label', 'dose-label', 'image-dose-label'}
+    if value not in allowed:
+        raise argparse.ArgumentTypeError(f"Invalid value '{value}'. Must be one of: {sorted(allowed)}")
+    return value
 
 
 def create_2d_image_plot(image_slice, save_path):

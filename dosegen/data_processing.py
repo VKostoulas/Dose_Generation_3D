@@ -519,14 +519,6 @@ class MedicalDataset(Dataset):
             input_parts.append(dose)
 
         if 'label' in self.load_mode:
-            label = torch.nn.functional.one_hot(label.long(), num_classes=self.n_classes + 1)
-
-            # Move channels to front and ensure correct shape
-            if label.ndim == 4:  # 3D: (D, H, W, C)
-                label = label.permute(3, 0, 1, 2)  # (C, D, H, W)
-            elif label.ndim == 3:  # 2D: (H, W, C)
-                label = label.permute(2, 0, 1)  # (C, H, W)
-
             input_parts.append(label)
 
         # Concatenate all inputs along channel (0) dimension

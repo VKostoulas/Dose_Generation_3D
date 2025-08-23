@@ -16,7 +16,6 @@ import glob
 import torch
 import time
 import pickle
-import shutil
 import argparse
 import matplotlib.pyplot as plt
 
@@ -30,7 +29,7 @@ from monai.networks.nets import AutoencoderKL, VQVAE, PatchDiscriminator
 from monai.losses import PatchAdversarialLoss, PerceptualLoss, DiceCELoss
 
 from dosegen.data_processing import get_data_loaders
-from dosegen.utils import load_config, create_2d_image_reconstruction_plot, create_gif_from_images, save_all_losses
+from dosegen.utils import load_config, create_gif_from_images, save_all_losses, validate_strict_combo
 
 
 class AutoEncoder:
@@ -94,6 +93,17 @@ class AutoEncoder:
             optimizer_d.zero_grad(set_to_none=True)
             for step, batch in progress_bar:
                 images = batch["input"].to(self.device)
+                if 'label' in self.config['gen_mode']:
+                    n_label_channels = self.config['dataset_config']['n_classes'] + 1
+                    labels = images[:, -1]
+                    labels = torch.nn.functional.one_hot(labels.long(), num_classes=n_label_channels)
+                    if labels.ndim == 5:  # 3D
+                        labels = labels.permute(0, 4, 1, 2, 3)
+                    elif labels.ndim == 4:  # 2D
+                        labels = labels.permute(0, 3, 1, 2)
+
+                    images = torch.cat((images, labels), dim=1)
+
                 step_loss_dict = {}
 
                 reconstructions = self.train_generator_step(discriminator, epoch, images, optimizer_g, perceptual_loss,
@@ -219,6 +229,16 @@ class AutoEncoder:
         with tqdm(enumerate(val_loader), total=len(val_loader), ncols=100, disable=disable_prog_bar, file=sys.stdout) as val_progress_bar:
             for step, batch in val_progress_bar:
                 images = batch["input"].to(self.device)
+                if 'label' in self.config['gen_mode']:
+                    n_label_channels = self.config['dataset_config']['n_classes'] + 1
+                    labels = images[:, -1]
+                    labels = torch.nn.functional.one_hot(labels.long(), num_classes=n_label_channels)
+                    if labels.ndim == 5:  # 3D
+                        labels = labels.permute(0, 4, 1, 2, 3)
+                    elif labels.ndim == 4:  # 2D
+                        labels = labels.permute(0, 3, 1, 2)
+
+                    images = torch.cat((images, labels), dim=1)
 
                 with torch.no_grad():
                     with autocast(enabled=True):
@@ -544,16 +564,8 @@ def get_config_for_current_task(dataset_id, model_type, gen_mode, progress_bar, 
     return config
 
 
-def validate_strict_combo(value):
-    # Explicitly define allowed combinations
-    allowed = {'image', 'dose', 'label', 'image-dose', 'image-label', 'dose-label', 'image-dose-label'}
-    if value not in allowed:
-        raise argparse.ArgumentTypeError(f"Invalid value '{value}'. Must be one of: {sorted(allowed)}")
-    return value
-
-
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="Train an Autoencoder Model to reconstruct images.")
+    parser = argparse.ArgumentParser(description="Train an Autoencoder model to reconstruct images.")
     parser.add_argument("dataset_id", type=str, help="Dataset ID")
     parser.add_argument("splitting", choices=["train-val-test", "5-fold"],
                         help="Choose either 'train-val-test' for a standard split or '5-fold' for cross-validation.")
@@ -581,13 +593,9 @@ def parse_arguments():
 
 
 def main():
-    # Set temp dir BEFORE any other imports or logic
-    temp_dir = tempfile.mkdtemp()  # Explicitly use local disk
-    print(f"Using temp directory: {temp_dir}")
-    os.environ["TMPDIR"] = temp_dir
-    tempfile.tempdir = temp_dir
+    with tempfile.TemporaryDirectory() as temp_dir:
+        print(f"Using temp directory: {temp_dir}")
 
-    try:
         args = parse_arguments()
         dataset_id = args.dataset_id
         splitting = args.splitting
@@ -606,9 +614,4 @@ def main():
 
         model = AutoEncoder(config=config, latent_space_type=latent_space_type)
         model.train(train_loader=train_loader, val_loader=val_loader)
-
-    finally:
-
-        shutil.rmtree(temp_dir)
-        print(f"Temp directory {temp_dir} removed.")
 
