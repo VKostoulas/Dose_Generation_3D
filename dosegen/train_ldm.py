@@ -165,8 +165,8 @@ class LDM:
             optimizer.zero_grad(set_to_none=True)
             for step, batch in progress_bar:
                 images = batch["input"].to(self.device)
-                if 'label' in self.config['gen_mode']:
-                    n_label_channels = self.config['dataset_config']['n_classes'] + 1
+                if 'label' in self.config[self.model_type]['gen_mode']:
+                    n_label_channels = self.config[self.model_type]['dataset_config']['n_classes'] + 1
                     labels = images[:, -1]
                     labels = torch.nn.functional.one_hot(labels.long(), num_classes=n_label_channels)
                     if labels.ndim == 5:  # 3D
@@ -239,8 +239,8 @@ class LDM:
         with tqdm(enumerate(val_loader), total=len(val_loader), ncols=100, disable=disable_prog_bar, file=sys.stdout) as val_progress_bar:
             for step, batch in val_progress_bar:
                 images = batch["input"].to(self.device)
-                if 'label' in self.config['gen_mode']:
-                    n_label_channels = self.config['dataset_config']['n_classes'] + 1
+                if 'label' in self.config[self.model_type]['gen_mode']:
+                    n_label_channels = self.config[self.model_type]['dataset_config']['n_classes'] + 1
                     labels = images[:, -1]
                     labels = torch.nn.functional.one_hot(labels.long(), num_classes=n_label_channels)
                     if labels.ndim == 5:  # 3D
@@ -446,8 +446,8 @@ class LDM:
         is_3d = sampled_images.ndim == 5
         B, C = sampled_images.shape[:2]
 
-        label_mode = 'label' in self.config.get('gen_mode', '')
-        n_label_channels = self.config['dataset_config']['n_classes'] + 1 if label_mode else 0
+        label_mode = 'label' in self.config[self.model_type].get('gen_mode', '')
+        n_label_channels = self.config[self.model_type]['dataset_config']['n_classes'] + 1 if label_mode else 0
         C_data = C - n_label_channels
 
         # Split data and labels
@@ -492,7 +492,7 @@ class LDM:
                     for slice_idx in range(D):
                         fig, ax = plt.subplots(figsize=(2, 2))
                         ax.imshow(mask_vol[slice_idx].cpu(),
-                                  vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                                  vmin=0, vmax=self.config[self.model_type]['dataset_config']['n_classes'], cmap='hot')
                         ax.set_title("Sample Label")
                         ax.axis("off")
 
@@ -527,7 +527,7 @@ class LDM:
                 if label_mode:
                     fig, ax = plt.subplots(figsize=(2.5, 2.5))
                     ax.imshow(sampled_masks[idx].cpu(),
-                              vmin=0, vmax=self.config['dataset_config']['n_classes'], cmap='hot')
+                              vmin=0, vmax=self.config[self.model_type]['dataset_config']['n_classes'], cmap='hot')
                     ax.set_title("Sample Label")
                     ax.axis("off")
 
@@ -708,9 +708,10 @@ def get_config_for_current_task(dataset_id, model_type, gen_mode, progress_bar, 
         config[m_type]['vae_params']['out_channels'] = img_channels + label_channels
         config[m_type]['discriminator_params']['in_channels'] = img_channels
 
-    config['data_path'] = os.path.join(preprocessed_dataset_path, 'data')
-    config['gen_mode'] = gen_mode
-    config['dataset_config'] = dataset_config
+        config[m_type]['data_path'] = os.path.join(preprocessed_dataset_path, 'data')
+        config[m_type]['gen_mode'] = gen_mode
+        config[m_type]['dataset_config'] = dataset_config
+
     config['progress_bar'] = progress_bar
     config['output_mode'] = 'verbose'
     config['results_path'] = results_path
