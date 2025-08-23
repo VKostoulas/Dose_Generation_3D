@@ -519,6 +519,7 @@ class MedicalDataset(Dataset):
             input_parts.append(dose)
 
         if 'label' in self.load_mode:
+            label = torch.unsqueeze(label, dim=0)
             input_parts.append(label)
 
         # Concatenate all inputs along channel (0) dimension
