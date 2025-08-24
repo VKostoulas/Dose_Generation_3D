@@ -698,7 +698,7 @@ def get_config_for_current_task(dataset_id, model_type, gen_mode, progress_bar, 
         raise FileNotFoundError(f"No pretrained autoencoder found. You should first train an autoencoder in order to "
                                 f"train a latent diffusion model")
 
-    results_path = os.path.join(main_results_path, 'ldm')
+    results_path = os.path.join(main_results_path, 'ldm', gen_mode)
     if os.path.exists(results_path) and not continue_training:
         raise FileExistsError(f"Results path {results_path} already exists.")
 
