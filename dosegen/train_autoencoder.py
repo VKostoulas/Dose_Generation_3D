@@ -102,7 +102,7 @@ class AutoEncoder:
                     elif labels.ndim == 4:  # 2D
                         labels = labels.permute(0, 3, 1, 2)
 
-                    images = torch.cat((images, labels), dim=1)
+                    images = torch.cat((images[:, :-1], labels), dim=1)
 
                 step_loss_dict = {}
 
@@ -238,7 +238,7 @@ class AutoEncoder:
                     elif labels.ndim == 4:  # 2D
                         labels = labels.permute(0, 3, 1, 2)
 
-                    images = torch.cat((images, labels), dim=1)
+                    images = torch.cat((images[:, :-1], labels), dim=1)
 
                 with torch.no_grad():
                     with autocast(enabled=True):
